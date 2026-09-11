@@ -1,0 +1,74 @@
+@import 'tailwindcss';
+
+/* Tailwind v4 theme: dark zinc base, lime accent for "done", red for danger. */
+@theme {
+  --color-bg: #09090b; /* zinc-950 */
+  --color-surface: #18181b; /* zinc-900 */
+  --color-surface-2: #27272a; /* zinc-800 */
+  --color-border: #3f3f46; /* zinc-700 */
+  --color-muted: #a1a1aa; /* zinc-400 */
+  --color-fg: #fafafa; /* zinc-50 */
+
+  --color-accent: #a3e635; /* lime-400 */
+  --color-accent-strong: #84cc16; /* lime-500 */
+  --color-accent-fg: #14200a;
+
+  --color-danger: #ef4444; /* red-500 */
+  --color-danger-strong: #dc2626; /* red-600 */
+
+  --spacing-safe-b: env(safe-area-inset-bottom);
+}
+
+/* The app is dark-only for now; `dark` stays on <html> so utilities work either way. */
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+/* Never let iOS zoom on focus: inputs must be >= 16px. */
+input,
+select,
+textarea,
+button {
+  font-size: 16px;
+  font-family: inherit;
+}
+
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+}
+
+button {
+  touch-action: manipulation;
+}
+
+/* Utilities for the safe-area-aware bottom bar. */
+@utility pb-safe {
+  padding-bottom: calc(env(safe-area-inset-bottom) + var(--spacing) * 2);
+}
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+@utility mb-safe-tabbar {
+  /* height of the tab bar + safe area, for scroll containers */
+  margin-bottom: calc(env(safe-area-inset-bottom) + 4.5rem);
+}
