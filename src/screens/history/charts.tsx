@@ -5,7 +5,10 @@
  */
 import type { ReactNode } from 'react';
 import {
+  Bar,
+  BarChart,
   CartesianGrid,
+  LabelList,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -17,6 +20,7 @@ import { formatDate } from '../../logic/format';
 import { AXIS_STYLE, CHART_COLORS, TOOLTIP_STYLE } from './chartTheme';
 import type { BodyweightPoint } from './bodyweightStats';
 import { formatKg } from './bodyweightStats';
+import { formatPerWeek, type MuscleBarRow, type WeekPoint } from './muscleSeries';
 import { hasTrend, paddedDomain, type SeriesPoint } from './series';
 
 function Tip({ title, value }: { title: string; value: string }) {
@@ -219,6 +223,169 @@ export function BodyweightChart({ data, height = 200, aside }: BodyweightChartPr
             stroke={CHART_COLORS.accent}
             strokeWidth={2}
             dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </ChartFrame>
+  );
+}
+
+export interface MuscleBarsChartProps {
+  /** Already sorted and filtered by `perWeekRows` / `splitByVolume`. */
+  data: MuscleBarRow[];
+  title?: string;
+  aside?: ReactNode;
+}
+
+/**
+ * Sets per week per muscle as horizontal bars — a vertical Recharts layout,
+ * so the muscle names read left to right on a phone. The frame grows with the
+ * number of bars rather than squashing them.
+ */
+export function MuscleBarsChart({
+  data,
+  title = 'Sets per week',
+  aside,
+}: MuscleBarsChartProps) {
+  if (!data.length) {
+    return (
+      <ChartFrame title={title} aside={aside} height={64}>
+        <div className="flex h-full items-center text-sm text-muted">
+          Nothing was linked to a muscle in this window.
+        </div>
+      </ChartFrame>
+    );
+  }
+
+  const max = Math.max(...data.map((row) => row.perWeek));
+
+  return (
+    <ChartFrame title={title} aside={aside} height={data.length * 24 + 12}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 2, right: 34, bottom: 2, left: 0 }}
+          barCategoryGap="18%"
+        >
+          <XAxis type="number" hide domain={[0, max * 1.18]} />
+          <YAxis
+            type="category"
+            dataKey="label"
+            width={84}
+            interval={0}
+            {...AXIS_STYLE}
+            tick={{ ...AXIS_STYLE.tick, fontSize: 11 }}
+          />
+          <Tooltip
+            cursor={{ fill: CHART_COLORS.border, fillOpacity: 0.35 }}
+            content={(props) => {
+              const row = props.payload?.[0]?.payload as MuscleBarRow | undefined;
+              if (!props.active || !row) return null;
+              return (
+                <Tip
+                  title={row.label}
+                  value={`${formatPerWeek(row.perWeek)} sets/week · ${row.sessions} session${
+                    row.sessions === 1 ? '' : 's'
+                  }`}
+                />
+              );
+            }}
+          />
+          <Bar
+            dataKey="perWeek"
+            fill={CHART_COLORS.accent}
+            radius={[0, 4, 4, 0]}
+            isAnimationActive={false}
+          >
+            <LabelList
+              dataKey="perWeek"
+              position="right"
+              offset={6}
+              fill={CHART_COLORS.muted}
+              fontSize={11}
+              formatter={(value: unknown) =>
+                typeof value === 'number' ? formatPerWeek(value) : ''
+              }
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </ChartFrame>
+  );
+}
+
+export interface WeekTrendChartProps {
+  data: WeekPoint[];
+  title?: string;
+  aside?: ReactNode;
+  height?: number;
+}
+
+/** Total weighted sets per week — one point per week, empty weeks included. */
+export function WeekTrendChart({
+  data,
+  title = 'Total sets per week',
+  aside,
+  height = 160,
+}: WeekTrendChartProps) {
+  if (data.length < 2) {
+    return (
+      <ChartFrame title={title} aside={aside} height={64}>
+        <div className="flex h-full items-center text-sm text-muted">
+          Pick a longer window to see the week-by-week trend.
+        </div>
+      </ChartFrame>
+    );
+  }
+
+  const first = data[0]!;
+  const last = data[data.length - 1]!;
+  const max = Math.max(...data.map((point) => point.value));
+
+  return (
+    <ChartFrame title={title} aside={aside} height={height}>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
+          <CartesianGrid stroke={CHART_COLORS.border} strokeOpacity={0.4} vertical={false} />
+          <XAxis
+            dataKey="t"
+            type="number"
+            scale="time"
+            domain={['dataMin', 'dataMax']}
+            ticks={[first.t, last.t]}
+            tickFormatter={(value: number) => formatDate(value)}
+            {...AXIS_STYLE}
+          />
+          <YAxis
+            width={46}
+            domain={[0, Math.max(4, Math.ceil(max * 1.1))]}
+            allowDecimals={false}
+            {...AXIS_STYLE}
+          />
+          <Tooltip
+            cursor={{ stroke: CHART_COLORS.border }}
+            content={(props) => {
+              const point = props.payload?.[0]?.payload as WeekPoint | undefined;
+              if (!props.active || !point) return null;
+              return (
+                <Tip
+                  title={`Week of ${point.label}`}
+                  value={`${formatPerWeek(point.value)} sets · ${point.sessions} session${
+                    point.sessions === 1 ? '' : 's'
+                  }`}
+                />
+              );
+            }}
+          />
+          <Line
+            type="monotone"
+            dataKey="value"
+            stroke={CHART_COLORS.accent}
+            strokeWidth={2}
+            dot={{ r: 2.5, fill: CHART_COLORS.accent, stroke: CHART_COLORS.accent }}
+            activeDot={{ r: 4 }}
             isAnimationActive={false}
           />
         </LineChart>

@@ -6,6 +6,7 @@ import Session from './screens/Session';
 import History from './screens/History';
 import ExerciseHistory from './screens/ExerciseHistory';
 import Programme from './screens/Programme';
+import CatalogEntryScreen from './screens/programme/CatalogEntryScreen';
 import SettingsScreen from './screens/Settings';
 
 /**
@@ -31,6 +32,7 @@ function Shell() {
           <Route path="/history" element={<History />} />
           <Route path="/history/:exerciseId" element={<ExerciseHistory />} />
           <Route path="/programme" element={<Programme />} />
+          <Route path="/programme/library/:id" element={<CatalogEntryScreen />} />
           <Route path="/settings" element={<SettingsScreen />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

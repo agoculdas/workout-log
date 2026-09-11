@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Card, PageHeader } from '../components';
-import { getExercise, getExerciseHistory, getTemplate } from '../db/repo';
-import type { Exercise, ExerciseSessionHistory, SetLog } from '../db/types';
+import { getCatalogEntry, getExercise, getExerciseHistory, getTemplate } from '../db/repo';
+import type { CatalogEntry, Exercise, ExerciseSessionHistory, SetLog } from '../db/types';
 import {
   formatDate,
   formatDuration,
@@ -16,6 +16,7 @@ import { isStalled } from '../logic/stall';
 import { TrendChart } from './history/charts';
 import { CHART_COLORS } from './history/chartTheme';
 import EditSetSheet from './history/EditSetSheet';
+import { describeMuscles } from './history/muscleSeries';
 import { formatSetLine } from './history/setLine';
 import {
   chartKindFor,
@@ -35,11 +36,12 @@ export function ExerciseHistory() {
     if (!exerciseId) return null;
     const exercise = await getExercise(exerciseId);
     if (!exercise) return null;
-    const [template, history] = await Promise.all([
+    const [template, history, entry] = await Promise.all([
       getTemplate(exercise.templateId),
       getExerciseHistory(exerciseId),
+      exercise.catalogId ? getCatalogEntry(exercise.catalogId) : undefined,
     ]);
-    return { exercise, templateName: template?.name, history };
+    return { exercise, templateName: template?.name, history, entry };
   }, [exerciseId]);
 
   const back = (
@@ -85,7 +87,7 @@ export function ExerciseHistory() {
     );
   }
 
-  const { exercise, templateName, history } = data;
+  const { exercise, templateName, history, entry } = data;
   const completed = completedOnly(history);
   // The stall rule counts reps, so a rowing time that keeps dropping would read
   // as a regression. Conditioning never gets the badge.
@@ -112,6 +114,7 @@ export function ExerciseHistory() {
       />
 
       <div className="space-y-3 px-4 pb-4">
+        <MuscleLine entry={entry} />
         <Charts exercise={exercise} history={completed} />
       </div>
 
@@ -132,6 +135,28 @@ export function ExerciseHistory() {
         )}
       </div>
     </div>
+  );
+}
+
+/* -------------------------------------------------------------- muscle line */
+
+/**
+ * What the movement trains, when the programme row is linked to the library.
+ * Unlinked rows show nothing — the muscle report says so on their behalf.
+ */
+function MuscleLine({ entry }: { entry: CatalogEntry | undefined }) {
+  if (!entry) return null;
+  const muscles = describeMuscles(entry);
+  return (
+    <p className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted">
+      {muscles ? <span className="min-w-0">{muscles}</span> : null}
+      <Link
+        to={`/programme/library/${entry.id}`}
+        className="text-accent underline-offset-2 active:underline"
+      >
+        View in library
+      </Link>
+    </p>
   );
 }
 

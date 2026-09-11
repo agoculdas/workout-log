@@ -3,13 +3,7 @@
  * conversion to/from a stored `Exercise`, and validation. No DOM, no Dexie —
  * so this stays trivially testable.
  */
-import type {
-  Exercise,
-  ExerciseType,
-  LoadUnit,
-  Measure,
-  TemplateId,
-} from '../../db/types';
+import type { Exercise, ExerciseType, LoadUnit, Measure, TemplateId } from '../../db/types';
 import type { NewExercise } from '../../db/repo';
 import { formatNumber } from '../../logic/format';
 
@@ -159,28 +153,6 @@ export function draftToInput(
     unit: draft.unit,
     increment: incrementDisabled(draft.unit) ? 0 : (draft.increment ?? 0),
     type: draft.type,
-    archived: false,
-  };
-}
-
-/** Copy of another template's exercise, landing in `templateId` with a new id. */
-export function copyForTemplate(
-  exercise: Exercise,
-  templateId: TemplateId,
-  order: number,
-): NewExercise {
-  return {
-    templateId,
-    name: exercise.name,
-    order,
-    sets: exercise.sets,
-    repMin: exercise.repMin,
-    repMax: exercise.repMax,
-    measure: exercise.measure,
-    perSide: exercise.perSide,
-    unit: exercise.unit,
-    increment: exercise.increment,
-    type: exercise.type,
     archived: false,
   };
 }

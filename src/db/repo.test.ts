@@ -217,6 +217,7 @@ describe('exercise snapshots', () => {
       perSide: live[0]!.perSide,
       unit: live[0]!.unit,
       type: live[0]!.type,
+      catalogId: live[0]!.catalogId,
     });
     // Snapshots carry the prescription only, never the progression increment.
     expect(session.exercises?.[0]).not.toHaveProperty('increment');

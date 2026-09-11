@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Button, NumberField, Sheet } from '../../components';
-import type { Exercise } from '../../db/types';
+import type { CatalogEntry, Exercise } from '../../db/types';
 import { SelectField, TextField, ToggleRow } from './Field';
 import {
   MEASURE_OPTIONS,
@@ -17,10 +18,51 @@ export interface ExerciseSheetProps {
   open: boolean;
   /** `undefined` = adding a new exercise. */
   exercise: Exercise | undefined;
+  /** The library entry `exercise.catalogId` resolves to, when it has one. */
+  libraryEntry?: CatalogEntry | undefined;
   onClose: () => void;
   onSave: (draft: ExerciseDraft) => void | Promise<void>;
   onDelete: () => void;
   onSwap: () => void;
+  /** Opens the library picker to re-point (or first link) `catalogId`. */
+  onChangeLibrary: () => void;
+}
+
+const LINK_CLASS = 'min-h-11 text-xs text-accent underline underline-offset-4';
+
+function LibraryLine({
+  entry,
+  onChange,
+}: {
+  entry: CatalogEntry | undefined;
+  onChange: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-border/70 bg-surface-2/40 px-3 py-2">
+      {entry ? (
+        <>
+          <p className="truncate text-xs text-muted">
+            Library: <span className="text-fg">{entry.name}</span>
+          </p>
+          <div className="mt-0.5 flex items-center gap-4">
+            <button type="button" onClick={onChange} className={LINK_CLASS}>
+              Change
+            </button>
+            <Link to={`/programme/library/${entry.id}`} className={LINK_CLASS}>
+              View
+            </Link>
+          </div>
+        </>
+      ) : (
+        <div className="flex flex-wrap items-center gap-x-2">
+          <p className="text-xs text-muted">Not linked to library ·</p>
+          <button type="button" onClick={onChange} className={LINK_CLASS}>
+            Link…
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 const MEASURE_NOUN: Record<ExerciseDraft['measure'], string> = {
@@ -33,10 +75,12 @@ const MEASURE_NOUN: Record<ExerciseDraft['measure'], string> = {
 export function ExerciseSheet({
   open,
   exercise,
+  libraryEntry,
   onClose,
   onSave,
   onDelete,
   onSwap,
+  onChangeLibrary,
 }: ExerciseSheetProps) {
   // The parent remounts this sheet per target (see its `key`), so the draft is
   // seeded once and never fights a live query refresh while you type.
@@ -84,6 +128,8 @@ export function ExerciseSheet({
           placeholder="Hack squat"
           error={visible.name}
         />
+
+        {exercise ? <LibraryLine entry={libraryEntry} onChange={onChangeLibrary} /> : null}
 
         <NumberField
           label="Sets"

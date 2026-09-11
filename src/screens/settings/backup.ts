@@ -52,6 +52,7 @@ export function summariseImport(counts: ImportCounts): string {
   add(counts.sessions, 'session', 'sessions');
   add(counts.setLogs, 'set', 'sets');
   add(counts.exercises, 'exercise', 'exercises');
+  add(counts.catalog, 'catalogue entry', 'catalogue entries');
   add(counts.templates, 'day', 'days');
   add(counts.bodyweight, 'weigh-in', 'weigh-ins');
   add(counts.settings, 'settings row', 'settings rows');

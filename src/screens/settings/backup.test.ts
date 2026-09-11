@@ -15,6 +15,7 @@ const emptyCounts: ImportCounts = {
   setLogs: 0,
   settings: 0,
   bodyweight: 0,
+  catalog: 0,
   skipped: 0,
 };
 

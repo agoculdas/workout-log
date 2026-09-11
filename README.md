@@ -17,6 +17,18 @@ load. Suggestions are pre-filled, never forced, and two regressing sessions in a
 "stalled" marker — no automatic deloads. Edit any exercise (sets, targets, unit, increment, type,
 order) on the **Programme** tab; changes apply to future sessions only and never rewrite history.
 
+## The exercise library
+
+The **Programme** tab has two halves. *Days* is the day editor; *Library* is the catalogue of
+movements behind it — what each one trains (primary and secondary muscles), how it is loaded
+(equipment, pattern, unilateral, default unit and measure) and which days it already appears on.
+Filter it by split tag, by muscle or by name, and tap an entry for its detail screen, where you
+can add it to a day, edit it, or retire it (retired entries drop out of the pickers but old
+programme rows and logged sets keep resolving). Adding or swapping an exercise on a day now picks
+from the library, so the new row inherits the movement's defaults — a custom, unlinked exercise is
+still one link away at the bottom of the picker. Renaming a library entry offers to rename the
+programme rows that point at it.
+
 ## Stack
 
 Vite + React 19 + TypeScript + Tailwind v4, Dexie (IndexedDB) for storage, `vite-plugin-pwa` for
@@ -59,6 +71,11 @@ Once installed it launches full-screen, portrait, and works with the phone in ae
 - **Past sessions are editable.** History → expand a session → expand an exercise to correct or
   delete any set, and edit the session note. Each session also stores its exercises as they were
   prescribed that day, so renaming or reordering on the Programme tab never rewrites history.
+- **Muscle report.** History → Muscles shows weekly sets per muscle over the last week, 4 weeks or
+  8 weeks — a set counts 1 for each primary muscle of its library entry and 0.5 for each secondary
+  one, averaged over the weeks that actually trained. Under it sit the week-by-week total and the
+  push:pull and squat:hinge ratios. Sets whose exercise has no library link are called out and
+  counted nowhere.
 
 ## Backup and restore
 

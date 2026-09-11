@@ -16,9 +16,10 @@ import { formatDate, formatSetSummary } from '../logic/format';
 import { totalVolume } from '../logic/volume';
 import { BodyweightSection } from './history/Bodyweight';
 import EditSetSheet from './history/EditSetSheet';
+import { MusclesSection } from './history/Muscles';
 import { formatSetLine } from './history/setLine';
 
-type Segment = 'sessions' | 'bodyweight';
+type Segment = 'sessions' | 'bodyweight' | 'muscles';
 
 /** History: completed sessions, a jump list of exercises, and the weight log. */
 export function History() {
@@ -37,6 +38,7 @@ export function History() {
             [
               ['sessions', 'Sessions'],
               ['bodyweight', 'Bodyweight'],
+              ['muscles', 'Muscles'],
             ] as const
           ).map(([value, label]) => (
             <button
@@ -56,7 +58,13 @@ export function History() {
         </div>
       </div>
 
-      {segment === 'sessions' ? <SessionsSection /> : <BodyweightSection />}
+      {segment === 'sessions' ? (
+        <SessionsSection />
+      ) : segment === 'bodyweight' ? (
+        <BodyweightSection />
+      ) : (
+        <MusclesSection />
+      )}
     </div>
   );
 }

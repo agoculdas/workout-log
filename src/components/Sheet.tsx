@@ -1,6 +1,11 @@
 import { useEffect, type ReactNode } from 'react';
 import Button from './Button';
 
+// Module-level scroll lock so nested sheets (e.g. ConfirmDialog over a Sheet)
+// don't restore "hidden" when the inner one closes.
+let openSheets = 0;
+let savedOverflow = '';
+
 export interface SheetProps {
   open: boolean;
   onClose: () => void;
@@ -18,11 +23,13 @@ export function Sheet({ open, onClose, title, children, footer }: SheetProps) {
       if (e.key === 'Escape') onClose();
     };
     document.addEventListener('keydown', onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    if (openSheets++ === 0) {
+      savedOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+    }
     return () => {
       document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prev;
+      if (--openSheets === 0) document.body.style.overflow = savedOverflow;
     };
   }, [open, onClose]);
 

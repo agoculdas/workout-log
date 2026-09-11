@@ -6,20 +6,31 @@
  *   const exercises = useLiveQuery(() => listExercises('lowerA'), ['lowerA']);
  */
 import { db, newId, type WorkoutDB } from './db';
-import { DEFAULT_SETTINGS, SEED_EXERCISES, SEED_TEMPLATES } from './seed';
+import { DEFAULT_SETTINGS, SEED_CATALOG, SEED_EXERCISES, SEED_TEMPLATES } from './seed';
+import { tallyMuscles } from '../logic/muscleVolume';
+import { EQUIPMENT, MUSCLES, PATTERNS } from './types';
 import type {
   BodyweightEntry,
+  CatalogEntry,
   Exercise,
   ExerciseSessionHistory,
   ExerciseSnapshot,
   ExportBundle,
   ImportCounts,
+  LoadUnit,
+  Measure,
+  Muscle,
+  MuscleVolumeResult,
+  PatternBalance,
   Session,
   SetLog,
   Settings,
+  SplitTag,
   TemplateId,
   Template,
 } from './types';
+
+export type { MuscleVolumeResult, MuscleVolumeRow, PatternBalance } from './types';
 
 /* ------------------------------------------------------------------ settings */
 
@@ -164,9 +175,288 @@ export async function archiveExercise(id: string, archived = true): Promise<void
   await db.exercises.update(id, { archived });
 }
 
+/* ----------------------------------------------------------------- catalogue */
+
+function unique<T>(values: readonly T[] | undefined): T[] {
+  return values ? [...new Set(values)] : [];
+}
+
+export interface ListCatalogOptions {
+  includeArchived?: boolean;
+  /** Keep entries carrying this split tag. */
+  tag?: SplitTag;
+  /** Keep entries that train this muscle, primary *or* secondary. */
+  muscle?: Muscle;
+  /** Case-insensitive substring of the name. */
+  query?: string;
+}
+
+/** The catalogue, sorted by name. Archived entries are hidden by default. */
+export async function listCatalog(opts: ListCatalogOptions = {}): Promise<CatalogEntry[]> {
+  const rows = await db.catalog.toArray();
+  const query = opts.query?.trim().toLowerCase();
+  const matches = rows.filter((row) => {
+    if (!opts.includeArchived && row.archived) return false;
+    if (opts.tag && !row.tags?.includes(opts.tag)) return false;
+    if (
+      opts.muscle &&
+      !row.primary?.includes(opts.muscle) &&
+      !row.secondary?.includes(opts.muscle)
+    ) {
+      return false;
+    }
+    if (query && !row.name.toLowerCase().includes(query)) return false;
+    return true;
+  });
+  return matches.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function getCatalogEntry(id: string): Promise<CatalogEntry | undefined> {
+  return db.catalog.get(id);
+}
+
+/** Look up many entries at once, keyed by id. */
+export async function getCatalogEntriesByIds(
+  ids: string[],
+): Promise<Map<string, CatalogEntry>> {
+  const rows = await db.catalog.bulkGet([...new Set(ids)]);
+  const map = new Map<string, CatalogEntry>();
+  rows.forEach((row) => {
+    if (row) map.set(row.id, row);
+  });
+  return map;
+}
+
+export type NewCatalogEntry = Omit<CatalogEntry, 'id'> & { id?: string };
+
+/**
+ * Create or update a catalogue entry. Omit `id` to create one (a UUID is
+ * assigned — the stock entries use `cat_<slug>` ids instead). Muscle and tag
+ * lists are de-duplicated, and a muscle listed as primary is dropped from
+ * secondary so it cannot be counted twice.
+ */
+export async function upsertCatalogEntry(input: NewCatalogEntry): Promise<CatalogEntry> {
+  const id = input.id ?? newId();
+  const existing = input.id ? await db.catalog.get(input.id) : undefined;
+  const primary = unique(input.primary);
+  const row: CatalogEntry = {
+    archived: false,
+    ...existing,
+    ...input,
+    id,
+    name: input.name.trim(),
+    primary,
+    secondary: unique(input.secondary).filter((m) => !primary.includes(m)),
+    tags: unique(input.tags),
+  };
+  await db.catalog.put(row);
+  return row;
+}
+
+/** Soft delete: hidden from pickers, still resolves for exercises using it. */
+export async function archiveCatalogEntry(id: string, archived = true): Promise<void> {
+  await db.catalog.update(id, { archived });
+}
+
+/**
+ * Rename a catalogue entry. With `propagateToExercises`, every programme row
+ * pointing at it (archived ones included) is renamed too. Returns how many
+ * exercises were renamed — 0 when propagation is off or nothing differed.
+ */
+export async function renameCatalogEntry(
+  id: string,
+  name: string,
+  propagateToExercises: boolean,
+): Promise<number> {
+  const next = name.trim();
+  return db.transaction('rw', db.catalog, db.exercises, async () => {
+    const entry = await db.catalog.get(id);
+    if (!entry) return 0;
+    await db.catalog.update(id, { name: next });
+    if (!propagateToExercises) return 0;
+    const rows = await db.exercises.where('catalogId').equals(id).toArray();
+    let renamed = 0;
+    for (const row of rows) {
+      if (row.name === next) continue;
+      await db.exercises.update(row.id, { name: next });
+      renamed++;
+    }
+    return renamed;
+  });
+}
+
+/** Where this movement appears in the programme, in template then list order. */
+export async function listExercisesForCatalog(
+  catalogId: string,
+  includeArchived = false,
+): Promise<Exercise[]> {
+  const rows = await db.exercises.where('catalogId').equals(catalogId).toArray();
+  const visible = includeArchived ? rows : rows.filter((e) => !e.archived);
+  return visible.sort((a, b) =>
+    a.templateId === b.templateId
+      ? a.order - b.order
+      : a.templateId.localeCompare(b.templateId),
+  );
+}
+
+/** Progression step implied by a unit: 2.5 kg for anything loaded in kg. */
+export function defaultIncrementFor(unit: LoadUnit): number {
+  return unit === 'kg_side' || unit === 'kg_total' ? 2.5 : 0;
+}
+
+/** Starting target for a measure: 10 reps, 45 seconds or 1 lap, all fixed. */
+export function defaultTargetFor(measure: Measure): { repMin: number; repMax: number } {
+  switch (measure) {
+    case 'seconds':
+      return { repMin: 45, repMax: 45 };
+    case 'laps':
+      return { repMin: 1, repMax: 1 };
+    case 'reps':
+      return { repMin: 10, repMax: 10 };
+  }
+}
+
+export type CatalogExerciseOverrides = Partial<
+  Pick<
+    Exercise,
+    'sets' | 'repMin' | 'repMax' | 'increment' | 'type' | 'perSide' | 'unit' | 'measure' | 'name'
+  >
+>;
+
+/**
+ * Append a catalogue movement to a day as a programme exercise.
+ *
+ * Defaults: the entry's name, `defaultUnit`, `defaultMeasure` and `unilateral`
+ * (as `perSide`); 3 sets; a fixed target from `defaultTargetFor`; an increment
+ * from `defaultIncrementFor`; type `accessory`, or `conditioning` when the
+ * entry's pattern is. `overrides` win, and are applied before the derived
+ * defaults are computed — override the unit and you get that unit's increment,
+ * override the measure and you get that measure's target. Passing `repMin`
+ * alone keeps the target fixed at that number.
+ *
+ * Throws when `catalogId` is not in the catalogue.
+ */
+export async function addExerciseFromCatalog(
+  templateId: TemplateId,
+  catalogId: string,
+  overrides: CatalogExerciseOverrides = {},
+): Promise<Exercise> {
+  const entry = await db.catalog.get(catalogId);
+  if (!entry) throw new Error(`Unknown catalogue entry: ${catalogId}`);
+
+  const unit = overrides.unit ?? entry.defaultUnit;
+  const measure = overrides.measure ?? entry.defaultMeasure;
+  const target = defaultTargetFor(measure);
+  const repMin = overrides.repMin ?? target.repMin;
+  const repMax = overrides.repMax ?? overrides.repMin ?? target.repMax;
+
+  return upsertExercise({
+    templateId,
+    catalogId: entry.id,
+    name: overrides.name?.trim() || entry.name,
+    sets: overrides.sets ?? 3,
+    repMin,
+    repMax,
+    measure,
+    perSide: overrides.perSide ?? entry.unilateral,
+    unit,
+    increment: overrides.increment ?? defaultIncrementFor(unit),
+    type:
+      overrides.type ?? (entry.pattern === 'conditioning' ? 'conditioning' : 'accessory'),
+    archived: false,
+  });
+}
+
+/* ---------------------------------------------------------- muscle analytics */
+
+/** Logged sets from finished sessions in `[from, to]`, plus how to resolve them. */
+async function loadWindow(opts: { from: number; to: number }): Promise<{
+  sets: SetLog[];
+  resolve: (exerciseId: string) => CatalogEntry | undefined;
+}> {
+  const [sessions, setLogs, exercises, catalog] = await Promise.all([
+    db.sessions.toArray(),
+    db.setLogs.toArray(),
+    db.exercises.toArray(),
+    db.catalog.toArray(),
+  ]);
+
+  const finished = new Set(
+    sessions.filter((s) => s.finishedAt !== undefined).map((s) => s.id),
+  );
+  const sets = setLogs.filter(
+    (s) =>
+      finished.has(s.sessionId) && s.completedAt >= opts.from && s.completedAt <= opts.to,
+  );
+
+  // Snapshot links win over the live row, so an exercise that was later
+  // repointed (or deleted) still counts toward what it was on the day.
+  const catalogIdByExercise = new Map<string, string>();
+  for (const session of sessions) {
+    for (const snapshot of session.exercises ?? []) {
+      if (snapshot.catalogId && !catalogIdByExercise.has(snapshot.id)) {
+        catalogIdByExercise.set(snapshot.id, snapshot.catalogId);
+      }
+    }
+  }
+  for (const exercise of exercises) {
+    if (exercise.catalogId && !catalogIdByExercise.has(exercise.id)) {
+      catalogIdByExercise.set(exercise.id, exercise.catalogId);
+    }
+  }
+
+  const entryById = new Map(catalog.map((entry) => [entry.id, entry]));
+  const resolve = (exerciseId: string): CatalogEntry | undefined => {
+    const catalogId = catalogIdByExercise.get(exerciseId);
+    return catalogId ? entryById.get(catalogId) : undefined;
+  };
+  return { sets, resolve };
+}
+
+/**
+ * Sets per muscle over a window (both bounds inclusive), counting only sets
+ * logged in finished sessions. A set counts 1 for each primary muscle of its
+ * catalogue entry and 0.5 for each secondary one; sets whose exercise has no
+ * catalogue link land in `unlinkedSets`. One row per muscle, `MUSCLES` order.
+ */
+export async function getMuscleVolume(opts: {
+  from: number;
+  to: number;
+}): Promise<MuscleVolumeResult> {
+  const { sets, resolve } = await loadWindow(opts);
+  return tallyMuscles(sets, resolve);
+}
+
+/**
+ * Logged sets grouped into push / pull / squat / hinge over the same window.
+ * `push` is horizontal + vertical push, `pull` is horizontal + vertical pull;
+ * lunge, carry, isolation, core and conditioning sets count toward none of
+ * the four.
+ */
+export async function getPatternBalance(opts: {
+  from: number;
+  to: number;
+}): Promise<PatternBalance> {
+  const { sets, resolve } = await loadWindow(opts);
+  const balance: PatternBalance = { push: 0, pull: 0, squat: 0, hinge: 0 };
+  for (const set of sets) {
+    const pattern = resolve(set.exerciseId)?.pattern;
+    if (pattern === 'horizontal_push' || pattern === 'vertical_push') balance.push++;
+    else if (pattern === 'horizontal_pull' || pattern === 'vertical_pull') balance.pull++;
+    else if (pattern === 'squat') balance.squat++;
+    else if (pattern === 'hinge') balance.hinge++;
+  }
+  return balance;
+}
+
 /* ------------------------------------------------------------------ sessions */
 
-/** The nine prescription fields a session freezes for each of its exercises. */
+/**
+ * The prescription fields a session freezes for each of its exercises, plus
+ * the catalogue link so muscle volume can be worked out from the snapshot even
+ * after the programme row is edited or deleted. `catalogId` is omitted (not
+ * written as `undefined`) for exercises that have no catalogue entry.
+ */
 export function exerciseSnapshot(exercise: Exercise): ExerciseSnapshot {
   return {
     id: exercise.id,
@@ -178,6 +468,7 @@ export function exerciseSnapshot(exercise: Exercise): ExerciseSnapshot {
     perSide: exercise.perSide,
     unit: exercise.unit,
     type: exercise.type,
+    ...(exercise.catalogId ? { catalogId: exercise.catalogId } : {}),
   };
 }
 
@@ -270,6 +561,8 @@ function fromSnapshot(
     increment: live?.increment ?? 0,
     archived: live?.archived,
     ...snapshot,
+    // A session logged before the catalogue existed falls back to the live row.
+    catalogId: snapshot.catalogId ?? live?.catalogId,
   };
 }
 
@@ -445,14 +738,16 @@ export async function deleteBodyweight(id: string): Promise<void> {
 
 /** Everything in the database as a plain JSON-serialisable object. */
 export async function exportAll(): Promise<ExportBundle> {
-  const [templates, exercises, sessions, setLogs, settings, bodyweight] = await Promise.all([
-    db.templates.toArray(),
-    db.exercises.toArray(),
-    db.sessions.toArray(),
-    db.setLogs.toArray(),
-    db.settings.toArray(),
-    db.bodyweight.toArray(),
-  ]);
+  const [templates, exercises, sessions, setLogs, settings, bodyweight, catalog] =
+    await Promise.all([
+      db.templates.toArray(),
+      db.exercises.toArray(),
+      db.sessions.toArray(),
+      db.setLogs.toArray(),
+      db.settings.toArray(),
+      db.bodyweight.toArray(),
+      db.catalog.toArray(),
+    ]);
   return {
     version: 1,
     exportedAt: Date.now(),
@@ -462,11 +757,18 @@ export async function exportAll(): Promise<ExportBundle> {
     setLogs,
     settings,
     bodyweight,
+    catalog,
   };
 }
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+/** A muscle list: an array of names from `MUSCLES` (empty is fine). */
+function isMuscleList(v: unknown): boolean {
+  return (
+    Array.isArray(v) && v.every((m) => typeof m === 'string' && (MUSCLES as readonly string[]).includes(m))
+  );
 }
 function hasId(v: unknown): v is Record<string, unknown> & { id: string } {
   return isObj(v) && typeof v.id === 'string' && v.id.length > 0;
@@ -486,6 +788,7 @@ export async function importMerge(json: unknown): Promise<ImportCounts> {
     setLogs: 0,
     settings: 0,
     bodyweight: 0,
+    catalog: 0,
     skipped: 0,
   };
 
@@ -519,8 +822,36 @@ export async function importMerge(json: unknown): Promise<ImportCounts> {
 
   await db.transaction(
     'rw',
-    [db.templates, db.exercises, db.sessions, db.setLogs, db.settings, db.bodyweight],
+    [
+      db.templates,
+      db.exercises,
+      db.sessions,
+      db.setLogs,
+      db.settings,
+      db.bodyweight,
+      db.catalog,
+    ],
     async () => {
+      // Bundles exported before the catalogue existed simply have no `catalog`
+      // key; `pick` yields an empty list and nothing is merged.
+      await merge<CatalogEntry>(
+        db.catalog,
+        pick('catalog'),
+        (r) =>
+          typeof r.name === 'string' &&
+          isMuscleList(r.primary) &&
+          isMuscleList(r.secondary) &&
+          typeof r.equipment === 'string' &&
+          (EQUIPMENT as readonly string[]).includes(r.equipment) &&
+          typeof r.pattern === 'string' &&
+          (PATTERNS as readonly string[]).includes(r.pattern) &&
+          typeof r.unilateral === 'boolean' &&
+          Array.isArray(r.tags) &&
+          r.tags.every((t) => typeof t === 'string') &&
+          typeof r.defaultUnit === 'string' &&
+          typeof r.defaultMeasure === 'string',
+        'catalog',
+      );
       await merge<Template>(
         db.templates,
         pick('templates'),
@@ -588,6 +919,7 @@ export async function wipeAll(database: WorkoutDB = db): Promise<void> {
       database.setLogs,
       database.settings,
       database.bodyweight,
+      database.catalog,
     ],
     async () => {
       await Promise.all([
@@ -597,9 +929,11 @@ export async function wipeAll(database: WorkoutDB = db): Promise<void> {
         database.setLogs.clear(),
         database.settings.clear(),
         database.bodyweight.clear(),
+        database.catalog.clear(),
       ]);
       await database.templates.bulkPut(SEED_TEMPLATES);
       await database.exercises.bulkPut(SEED_EXERCISES);
+      await database.catalog.bulkPut(SEED_CATALOG);
       await database.settings.put({ ...DEFAULT_SETTINGS });
     },
   );

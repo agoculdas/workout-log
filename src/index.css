@@ -39,13 +39,16 @@ body {
   overscroll-behavior-y: none;
 }
 
-/* Never let iOS zoom on focus: inputs must be >= 16px. */
-input,
-select,
-textarea,
-button {
-  font-size: 16px;
-  font-family: inherit;
+/* Never let iOS zoom on focus: inputs must be >= 16px.
+   Inside @layer base so Tailwind text-* utilities on buttons still win. */
+@layer base {
+  input,
+  select,
+  textarea,
+  button {
+    font-size: 16px;
+    font-family: inherit;
+  }
 }
 
 input[type='number']::-webkit-outer-spin-button,

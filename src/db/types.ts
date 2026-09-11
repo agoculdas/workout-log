@@ -25,10 +25,111 @@ export interface Template {
   order: number;
 }
 
+/** Muscles a catalogue entry can train. Order is the canonical display order. */
+export const MUSCLES = [
+  'quads',
+  'hamstrings',
+  'glutes',
+  'adductors',
+  'abductors',
+  'calves',
+  'chest',
+  'lats',
+  'upper_back',
+  'front_delts',
+  'side_delts',
+  'rear_delts',
+  'biceps',
+  'triceps',
+  'forearms',
+  'core',
+  'lower_back',
+] as const;
+export type Muscle = (typeof MUSCLES)[number];
+
+/** What the movement is loaded with. */
+export const EQUIPMENT = [
+  'barbell',
+  'dumbbell',
+  'machine',
+  'cable',
+  'band',
+  'bodyweight',
+  'kettlebell',
+  'other',
+] as const;
+export type Equipment = (typeof EQUIPMENT)[number];
+
+/** Movement pattern, used for push/pull/squat/hinge balance. */
+export const PATTERNS = [
+  'squat',
+  'hinge',
+  'lunge',
+  'horizontal_push',
+  'vertical_push',
+  'horizontal_pull',
+  'vertical_pull',
+  'carry',
+  'isolation',
+  'core',
+  'conditioning',
+] as const;
+export type Pattern = (typeof PATTERNS)[number];
+
+/** Split tags: fixed vocabulary, grouped by split system for UI. */
+export const SPLIT_TAGS = {
+  upperLower: ['upper', 'lower'],
+  ppl: ['push', 'pull', 'legs'],
+  bodyPart: ['chest', 'back', 'shoulders', 'arms', 'legs', 'core'],
+  other: ['cardio'],
+} as const;
+
+export type SplitTagGroup = keyof typeof SPLIT_TAGS;
+
+export type SplitTag =
+  | 'upper'
+  | 'lower'
+  | 'push'
+  | 'pull'
+  | 'legs'
+  | 'chest'
+  | 'back'
+  | 'shoulders'
+  | 'arms'
+  | 'core'
+  | 'cardio';
+
+/**
+ * A movement in the exercise catalogue — the library you pick from when
+ * building a day. Programme rows (`Exercise`) point at one via `catalogId`;
+ * the catalogue carries what the movement *is* (muscles, equipment, pattern),
+ * the programme row carries how *you* are running it (sets, reps, increment).
+ */
+export interface CatalogEntry {
+  id: string;
+  name: string;
+  /** Muscles the movement trains directly. Counts 1 set each. */
+  primary: Muscle[];
+  /** Assisting muscles. Count 0.5 set each. */
+  secondary: Muscle[];
+  equipment: Equipment;
+  pattern: Pattern;
+  /** One limb at a time (the programme row's `perSide` defaults from this). */
+  unilateral: boolean;
+  tags: SplitTag[];
+  defaultUnit: LoadUnit;
+  defaultMeasure: Measure;
+  notes?: string;
+  /** Soft delete: hidden from pickers, still resolves for old exercises. */
+  archived?: boolean;
+}
+
 export interface Exercise {
   id: string;
   templateId: TemplateId;
   name: string;
+  /** The catalogue movement this row is an instance of, when it has one. */
+  catalogId?: string;
   /** Position within the template's exercise list. */
   order: number;
   sets: number;
@@ -53,7 +154,16 @@ export interface Exercise {
  */
 export type ExerciseSnapshot = Pick<
   Exercise,
-  'id' | 'name' | 'sets' | 'repMin' | 'repMax' | 'measure' | 'perSide' | 'unit' | 'type'
+  | 'id'
+  | 'name'
+  | 'sets'
+  | 'repMin'
+  | 'repMax'
+  | 'measure'
+  | 'perSide'
+  | 'unit'
+  | 'type'
+  | 'catalogId'
 >;
 
 export interface Session {
@@ -110,6 +220,8 @@ export interface ExportBundle {
   setLogs: SetLog[];
   settings: Settings[];
   bodyweight: BodyweightEntry[];
+  /** Absent in bundles exported before the catalogue existed. */
+  catalog?: CatalogEntry[];
 }
 
 /** Rows inserted per table by `importMerge()`. */
@@ -120,7 +232,34 @@ export interface ImportCounts {
   setLogs: number;
   settings: number;
   bodyweight: number;
+  catalog: number;
   skipped: number;
+}
+
+/** One muscle's share of the logged sets in a window. */
+export interface MuscleVolumeRow {
+  muscle: Muscle;
+  /** Sets where this muscle was a *primary* mover. */
+  sets: number;
+  /** Primary sets x1 + secondary sets x0.5. */
+  weightedSets: number;
+  /** Distinct sessions that trained it (primary or secondary). */
+  sessions: number;
+}
+
+/** `getMuscleVolume()` result: one row per muscle, plus what could not be resolved. */
+export interface MuscleVolumeResult {
+  rows: MuscleVolumeRow[];
+  /** Logged sets whose exercise has no catalogue link, so they count nowhere. */
+  unlinkedSets: number;
+}
+
+/** Logged sets grouped into the four balance buckets. */
+export interface PatternBalance {
+  push: number;
+  pull: number;
+  squat: number;
+  hinge: number;
 }
 
 /** One session's worth of sets for a single exercise, used by history/progression. */
