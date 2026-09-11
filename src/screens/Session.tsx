@@ -1,4 +1,11 @@
-import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Button, ConfirmDialog, Sheet } from '../components';
@@ -16,10 +23,11 @@ import { suggestLoad } from '../logic/progression';
 import { isStalled } from '../logic/stall';
 import useSettings from '../hooks/useSettings';
 import useRestTimer from '../hooks/useRestTimer';
+import useWakeLock from '../hooks/useWakeLock';
 import RestTimerBar from './session/RestTimerBar';
 import SetRow from './session/SetRow';
 import { resolveSwipe } from './session/swipe';
-import { playRestDoneCue, primeAudio } from './session/cue';
+import { notifyRestOver, playRestDoneCue, primeAudio, requestNotifyPermission } from './session/cue';
 import type { Exercise, SetLog } from '../db/types';
 
 interface Draft {
@@ -40,7 +48,47 @@ export function Session() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const settings = useSettings();
-  const timer = useRestTimer(playRestDoneCue);
+  useWakeLock(settings.keepAwake);
+
+  /** Which exercise the running rest belongs to — it outlives navigation. */
+  const [restLabel, setRestLabel] = useState('');
+  /** Set when a rest ran out with the tab hidden, so the cue went unheard. */
+  const missedCueFor = useRef<number | null>(null);
+
+  /**
+   * A hidden tab has a suspended audio context and, on phones, frozen timers,
+   * so the beep is worthless there — the notification is the only cue that
+   * lands. Remember the miss and replay the beep on the way back in.
+   */
+  const handleZero = useCallback(
+    (endsAt: number) => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        missedCueFor.current = endsAt;
+      }
+      playRestDoneCue();
+      void notifyRestOver(restLabel);
+    },
+    [restLabel],
+  );
+
+  const timer = useRestTimer(handleZero);
+  const poll = timer.poll;
+
+  // Coming back to the tab: catch up a rest that ran out while it was hidden.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      // Frozen intervals never reached zero — this fires onZero, now audibly.
+      poll();
+      // Throttled ones did, but nobody heard it. Once per rest, either way.
+      if (missedCueFor.current !== null) {
+        missedCueFor.current = null;
+        playRestDoneCue();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [poll]);
 
   const detail = useLiveQuery(
     async () => (id ? ((await getSessionDetail(id)) ?? null) : null),
@@ -54,8 +102,8 @@ export function Session() {
   const [noteOpen, setNoteOpen] = useState(false);
   /** `null` until the user types — the stored note shows through until then. */
   const [noteDraft, setNoteDraft] = useState<string | null>(null);
-  /** Which exercise the running rest belongs to — it outlives navigation. */
-  const [restLabel, setRestLabel] = useState('');
+  /** Notifications are asked for once per session, on the first "done" tap. */
+  const askedToNotify = useRef(false);
   const swipeStart = useRef<{ x: number; y: number; pointerId: number } | null>(null);
 
   const exercises = useMemo(() => detail?.exercises ?? [], [detail]);
@@ -149,6 +197,11 @@ export function Session() {
     if (!id || !exercise) return;
     // Must happen synchronously inside the tap so the beep is unlocked.
     primeAudio();
+    // Same reason: permission prompts are only allowed from a user gesture.
+    if (!askedToNotify.current) {
+      askedToNotify.current = true;
+      requestNotifyPermission();
+    }
 
     const values = valuesFor(setIndex);
     const reps = values.reps ?? 0;

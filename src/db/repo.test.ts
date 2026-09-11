@@ -13,6 +13,7 @@ import {
   getSessionDetail,
   getSettings,
   importMerge,
+  readSettings,
   listBodyweight,
   listExercises,
   listTemplates,
@@ -87,6 +88,30 @@ describe('seed', () => {
     expect(await getSettings()).toMatchObject({ restPrimary: 120, restAccessory: 90, units: 'kg' });
     expect(await updateSettings({ restPrimary: 150 })).toMatchObject({ restPrimary: 150 });
     expect((await getSettings()).restPrimary).toBe(150);
+  });
+});
+
+describe('settings defaults', () => {
+  it('fills fields a row written by an older version never had', async () => {
+    // A pre-keepAwake row, exactly as an old build would have left it.
+    await db.settings.put({
+      id: 'settings',
+      restPrimary: 100,
+      restAccessory: 80,
+      units: 'kg',
+    } as never);
+
+    const settings = await getSettings();
+    expect(settings.restPrimary).toBe(100);
+    expect(settings.keepAwake).toBe(true);
+    expect(await readSettings()).toMatchObject({ restAccessory: 80, keepAwake: true });
+
+    // Writing anything back persists the filled-in defaults too.
+    await updateSettings({ restPrimary: 110 });
+    expect(await db.settings.get('settings')).toMatchObject({
+      restPrimary: 110,
+      keepAwake: true,
+    });
   });
 });
 
@@ -176,6 +201,86 @@ describe('sessions and sets', () => {
   });
 });
 
+describe('exercise snapshots', () => {
+  it('freezes the template exercises into the session when it starts', async () => {
+    const session = await startSession('lowerA');
+    const live = await listExercises('lowerA');
+
+    expect(session.exercises?.map((e) => e.id)).toEqual(live.map((e) => e.id));
+    expect(session.exercises?.[0]).toEqual({
+      id: live[0]!.id,
+      name: live[0]!.name,
+      sets: live[0]!.sets,
+      repMin: live[0]!.repMin,
+      repMax: live[0]!.repMax,
+      measure: live[0]!.measure,
+      perSide: live[0]!.perSide,
+      unit: live[0]!.unit,
+      type: live[0]!.type,
+    });
+    // Snapshots carry the prescription only, never the progression increment.
+    expect(session.exercises?.[0]).not.toHaveProperty('increment');
+  });
+
+  it('leaves archived exercises out of the snapshot', async () => {
+    const [first] = await listExercises('lowerA');
+    await archiveExercise(first!.id);
+    const session = await startSession('lowerA');
+    expect(session.exercises?.some((e) => e.id === first!.id)).toBe(false);
+  });
+
+  it('getSessionDetail shows the name and order the session was logged with', async () => {
+    const session = await startSession('lowerA');
+    const original = await listExercises('lowerA');
+    const target = original[2]!;
+    await logSet({
+      sessionId: session.id,
+      exerciseId: target.id,
+      setIndex: 0,
+      load: 40,
+      reps: 10,
+    });
+
+    // Rename it and move it to the front, the way a Programme edit would.
+    await upsertExercise({ ...target, name: 'Lying leg curl' });
+    await reorderExercises(
+      'lowerA',
+      [target.id, ...original.filter((e) => e.id !== target.id).map((e) => e.id)],
+    );
+
+    const detail = await getSessionDetail(session.id);
+    expect(detail!.exercises.map((e) => e.id)).toEqual(original.map((e) => e.id));
+    expect(detail!.exercises[2]!.name).toBe(target.name);
+    // The live increment still comes through, so progression keeps working.
+    expect(detail!.exercises[2]!.increment).toBe(target.increment);
+    expect(detail!.setsByExercise[target.id]).toHaveLength(1);
+  });
+
+  it('keeps a logged exercise that is missing from the snapshot', async () => {
+    const session = await startSession('lowerA');
+    const upper = (await listExercises('upperA'))[0]!;
+    await logSet({
+      sessionId: session.id,
+      exerciseId: upper.id,
+      setIndex: 0,
+      load: 20,
+      reps: 8,
+    });
+
+    const detail = await getSessionDetail(session.id);
+    expect(detail!.exercises.map((e) => e.id)).toContain(upper.id);
+  });
+
+  it('falls back to the live template for a session with no snapshot', async () => {
+    const session = await startSession('lowerA');
+    await db.sessions.update(session.id, { exercises: undefined });
+    const detail = await getSessionDetail(session.id);
+    expect(detail!.exercises.map((e) => e.id)).toEqual(
+      (await listExercises('lowerA')).map((e) => e.id),
+    );
+  });
+});
+
 describe('bodyweight', () => {
   it('keeps one entry per day', async () => {
     await addBodyweight('2024-05-01', 80);
@@ -218,6 +323,40 @@ describe('export / import', () => {
     expect(await db.sessions.count()).toBe(2);
 
     await expect(importMerge('nope')).rejects.toThrow();
+  });
+
+  it('imports sessions with and without an exercise snapshot', async () => {
+    const counts = await importMerge({
+      version: 1,
+      exportedAt: Date.now(),
+      sessions: [
+        { id: 'old', templateId: 'lowerA', startedAt: 1 },
+        {
+          id: 'new',
+          templateId: 'lowerA',
+          startedAt: 2,
+          exercises: [
+            {
+              id: 'ex_leg_press',
+              name: 'Leg press',
+              sets: 3,
+              repMin: 12,
+              repMax: 12,
+              measure: 'reps',
+              perSide: false,
+              unit: 'kg_total',
+              type: 'primary',
+            },
+          ],
+        },
+        { id: 'bad', templateId: 'lowerA', startedAt: 3, exercises: 'nope' },
+      ],
+    });
+
+    expect(counts.sessions).toBe(2);
+    expect(counts.skipped).toBe(1);
+    expect((await getSessionDetail('old'))!.exercises.length).toBeGreaterThan(1);
+    expect((await getSessionDetail('new'))!.exercises.map((e) => e.name)).toEqual(['Leg press']);
   });
 
   it('wipeAll clears logs and restores the programme', async () => {

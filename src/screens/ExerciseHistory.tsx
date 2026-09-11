@@ -15,6 +15,8 @@ import {
 import { isStalled } from '../logic/stall';
 import { TrendChart } from './history/charts';
 import { CHART_COLORS } from './history/chartTheme';
+import EditSetSheet from './history/EditSetSheet';
+import { formatSetLine } from './history/setLine';
 import {
   chartKindFor,
   completedOnly,
@@ -213,7 +215,11 @@ function SessionRow({
   entry: ExerciseSessionHistory;
 }) {
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<{ set: SetLog; setNumber: number } | null>(null);
   const when = entry.session.finishedAt ?? entry.session.startedAt;
+  // The name this exercise had when the session was logged, if it has changed.
+  const snapshotName = entry.session.exercises?.find((e) => e.id === exercise.id)?.name;
+  const wasCalled = snapshotName && snapshotName !== exercise.name ? snapshotName : undefined;
 
   return (
     <li>
@@ -246,35 +252,45 @@ function SessionRow({
           </svg>
         </button>
         {open ? (
-          <ul className="border-t border-border/60 px-4 py-2">
-            {entry.sets.map((set, i) => (
-              <li key={set.id} className="flex items-baseline gap-3 py-1 text-sm">
-                <span className="w-12 shrink-0 text-muted">set {i + 1}</span>
-                <span className="tabular-nums">{formatSetLine(exercise, set)}</span>
-              </li>
-            ))}
-          </ul>
+          <div className="border-t border-border/60 px-4 py-2">
+            {wasCalled ? (
+              <p className="pb-1 text-xs text-muted">was: {wasCalled}</p>
+            ) : null}
+            <ul>
+              {entry.sets.map((set, i) => (
+                <li key={set.id} className="flex items-center gap-3 text-sm">
+                  <span className="w-12 shrink-0 text-muted">set {i + 1}</span>
+                  <span className="min-w-0 flex-1 truncate tabular-nums">
+                    {formatSetLine(exercise, set)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setEditing({ set, setNumber: i + 1 })}
+                    className="min-h-11 shrink-0 rounded-lg px-3 text-sm text-accent active:bg-surface-2"
+                  >
+                    Edit
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : null}
       </Card>
+
+      {editing ? (
+        <EditSetSheet
+          key={editing.set.id}
+          set={editing.set}
+          exercise={exercise}
+          setNumber={editing.setNumber}
+          onClose={() => setEditing(null)}
+        />
+      ) : null}
     </li>
   );
 }
 
 /* ------------------------------------------------------------------ helpers */
-
-/** "70 kg × 10", "45s", "30 kg/hand × 2 laps". */
-function formatSetLine(exercise: Exercise, set: SetLog): string {
-  const repPart =
-    exercise.measure === 'seconds'
-      ? formatDuration(set.reps)
-      : exercise.measure === 'laps'
-        ? `${formatNumber(set.reps)} lap${set.reps === 1 ? '' : 's'}`
-        : `${formatNumber(set.reps)} reps`;
-
-  if (exercise.unit === 'none') return repPart;
-  if (exercise.unit === 'bodyweight' && set.load === 0) return `BW × ${repPart}`;
-  return `${formatLoad(exercise, set.load)} × ${repPart}`;
-}
 
 function unitSuffix(exercise: Exercise): string {
   if (exercise.unit === 'kg_side') return ' (kg/hand)';

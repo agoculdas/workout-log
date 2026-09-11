@@ -38,8 +38,63 @@ function Section({
   );
 }
 
+/** Switch row: label + description on the left, a sliding switch on the right. */
+function Toggle({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="flex min-h-12 w-full items-center gap-3 text-left"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block text-base">{label}</span>
+        {description ? <span className="block text-xs text-muted">{description}</span> : null}
+      </span>
+      <span
+        aria-hidden="true"
+        className={[
+          'flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors',
+          checked ? 'border-accent bg-accent' : 'border-border bg-surface-2',
+        ].join(' ')}
+      >
+        <span
+          className={[
+            'h-5.5 w-5.5 rounded-full bg-fg transition-transform',
+            checked ? 'translate-x-5' : '',
+          ].join(' ')}
+        />
+      </span>
+    </button>
+  );
+}
+
 /** How long to wait after the last keystroke before writing to Dexie. */
 const REST_COMMIT_DEBOUNCE_MS = 400;
+
+type NotifyState = 'unsupported' | NotificationPermission;
+
+function readNotifyState(): NotifyState {
+  return typeof Notification === 'undefined' ? 'unsupported' : Notification.permission;
+}
+
+const NOTIFY_LABEL: Record<NotifyState, string> = {
+  unsupported: 'Not supported in this browser',
+  granted: 'Allowed',
+  denied: 'Blocked — turn it back on in your browser settings',
+  default: 'Not asked yet',
+};
 
 /**
  * Rest-timer field. Typing is debounced so "135" is stored once rather than as
@@ -128,6 +183,8 @@ export function Settings() {
   const [busy, setBusy] = useState(false);
   const [confirmWipe, setConfirmWipe] = useState(false);
   const [storage, setStorage] = useState<{ usage: number; quota: number } | null>(null);
+  const [persisted, setPersisted] = useState<boolean | null>(null);
+  const [notify, setNotify] = useState<NotifyState>(readNotifyState);
 
   /**
    * Settings writes are read-modify-write, so two taps in quick succession can
@@ -144,10 +201,31 @@ export function Settings() {
       if (cancelled) return;
       setStorage({ usage: estimate.usage ?? 0, quota: estimate.quota ?? 0 });
     });
+    void navigator.storage?.persisted?.().then((value) => {
+      if (!cancelled) setPersisted(value);
+    });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  /** The app already asked once at launch; this is the user asking again. */
+  const requestPersist = async () => {
+    try {
+      setPersisted((await navigator.storage?.persist?.()) ?? false);
+    } catch {
+      setPersisted(false);
+    }
+  };
+
+  const askToNotify = async () => {
+    if (typeof Notification === 'undefined') return;
+    try {
+      setNotify(await Notification.requestPermission());
+    } catch {
+      setNotify(readNotifyState());
+    }
+  };
 
   const exportJson = async () => {
     setBusy(true);
@@ -285,6 +363,35 @@ export function Settings() {
       </Section>
 
       <Section
+        title="During a session"
+        note="Timers stop counting when the app is in the background — the notification is what reaches you there."
+      >
+        <Toggle
+          label="Keep screen on during sessions"
+          description="Holds a wake lock while the logging screen is open."
+          checked={settings.keepAwake}
+          onChange={(keepAwake) => commit({ keepAwake })}
+        />
+
+        <div className="border-t border-border/70 pt-4">
+          <p className="text-base">Notify when rest ends</p>
+          <p className="mt-0.5 text-xs text-muted">
+            When the app is in the background. {NOTIFY_LABEL[notify]}.
+          </p>
+          {notify === 'default' ? (
+            <Button
+              full
+              variant="secondary"
+              className="mt-3"
+              onClick={() => void askToNotify()}
+            >
+              Allow notifications
+            </Button>
+          ) : null}
+        </div>
+      </Section>
+
+      <Section
         title="Backup"
         note="Import merges: rows you already have are kept, never overwritten."
       >
@@ -349,7 +456,23 @@ export function Settings() {
                 : '—'}
             </dd>
           </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted">Storage</dt>
+            <dd className="text-right">
+              {persisted === null
+                ? '—'
+                : persisted
+                  ? 'persistent'
+                  : 'best-effort (may be cleared when space is low)'}
+            </dd>
+          </div>
         </dl>
+
+        {persisted === false ? (
+          <Button full variant="secondary" onClick={() => void requestPersist()}>
+            Request persistent storage
+          </Button>
+        ) : null}
 
         <div className="border-t border-border/70 pt-4">
           {install.standalone ? (

@@ -65,3 +65,66 @@ export function playRestDoneCue(): void {
     /* audio is a nicety too */
   }
 }
+
+/* ----------------------------------------------------------- notifications */
+
+/**
+ * Older `NotificationOptions` extras that the current DOM lib has dropped but
+ * Android Chrome still honours. Declared locally rather than cast away.
+ */
+type RestNotificationOptions = NotificationOptions & {
+  renotify?: boolean;
+  vibrate?: number[];
+};
+
+function notificationsGranted(): boolean {
+  return typeof Notification !== 'undefined' && Notification.permission === 'granted';
+}
+
+/**
+ * Ask for notification permission, but only when the browser has not already
+ * decided. Must be called from inside a user gesture (the "done" tap).
+ */
+export function requestNotifyPermission(): void {
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission !== 'default') return;
+  try {
+    void Notification.requestPermission().catch(() => undefined);
+  } catch {
+    /* Safari < 16 used the callback form; not worth a shim */
+  }
+}
+
+/**
+ * "Rest over" notification for the case the phone is in a pocket or another
+ * app is in front — the only cue that reaches you when the tab is hidden and
+ * its audio context is suspended. Silent when the app is on screen: the bar
+ * and the beep already say it.
+ */
+export async function notifyRestOver(exerciseName: string): Promise<void> {
+  if (typeof document === 'undefined' || document.visibilityState !== 'hidden') return;
+  if (!notificationsGranted()) return;
+
+  const options: RestNotificationOptions = {
+    body: exerciseName ? `Next set: ${exerciseName}` : 'Next set',
+    tag: 'rest-timer',
+    renotify: true,
+    vibrate: [200, 100, 200],
+  };
+
+  try {
+    const registration = await navigator.serviceWorker?.ready;
+    if (registration) {
+      await registration.showNotification('Rest over', options);
+      return;
+    }
+  } catch {
+    /* no service worker (dev server, private mode) — fall through */
+  }
+
+  try {
+    new Notification('Rest over', options);
+  } catch {
+    /* some browsers only allow the service-worker form */
+  }
+}

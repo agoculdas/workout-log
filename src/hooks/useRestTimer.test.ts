@@ -101,6 +101,40 @@ describe('createRestTimer', () => {
     unsubscribe();
   });
 
+  it('passes the endsAt it fired for to onZero', () => {
+    const onZero = vi.fn();
+    const { timer, unsubscribe } = mounted(onZero);
+    timer.start(2);
+    vi.advanceTimersByTime(2_100);
+    expect(onZero).toHaveBeenCalledWith(2_000);
+    unsubscribe();
+  });
+
+  it('poll() catches up a rest that ran out while the tab was frozen', () => {
+    const onZero = vi.fn();
+    const timer = createRestTimer({ onZero });
+    const unsubscribe = timer.subscribe(() => {});
+    timer.start(60);
+
+    // Nothing ticked (hidden tab), but the wall clock moved past the end.
+    unsubscribe();
+    vi.setSystemTime(61_000);
+
+    const resubscribe = timer.subscribe(() => {});
+    expect(onZero).not.toHaveBeenCalled();
+
+    const state = timer.poll();
+    expect(onZero).toHaveBeenCalledTimes(1);
+    expect(onZero).toHaveBeenCalledWith(60_000);
+    expect(state).toMatchObject({ endsAt: 60_000, remaining: 0, running: false });
+
+    // Still at most once per rest, however often we poll or tick.
+    timer.poll();
+    vi.advanceTimersByTime(1_000);
+    expect(onZero).toHaveBeenCalledTimes(1);
+    resubscribe();
+  });
+
   it('hides itself a few seconds after finishing', () => {
     const { timer, unsubscribe } = mounted();
     timer.start(1);

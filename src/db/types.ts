@@ -46,12 +46,27 @@ export interface Exercise {
   archived?: boolean;
 }
 
+/**
+ * The exercise as it was prescribed when the session started. Frozen into the
+ * session so later Programme edits (rename, reorder, change the rep range)
+ * never rewrite what a finished session says — or shuffle one in progress.
+ */
+export type ExerciseSnapshot = Pick<
+  Exercise,
+  'id' | 'name' | 'sets' | 'repMin' | 'repMax' | 'measure' | 'perSide' | 'unit' | 'type'
+>;
+
 export interface Session {
   id: string;
   templateId: TemplateId;
   startedAt: number;
   finishedAt?: number;
   notes?: string;
+  /**
+   * The template's exercises, in order, as of `startedAt`. Absent on sessions
+   * recorded before snapshots existed — those fall back to the live rows.
+   */
+  exercises?: ExerciseSnapshot[];
 }
 
 export interface SetLog {
@@ -74,6 +89,8 @@ export interface Settings {
   /** Rest timer default in seconds for accessories. */
   restAccessory: number;
   units: 'kg';
+  /** Hold a screen wake lock while the Session screen is open. */
+  keepAwake: boolean;
 }
 
 export interface BodyweightEntry {

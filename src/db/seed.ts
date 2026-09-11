@@ -18,6 +18,7 @@ export const DEFAULT_SETTINGS: Settings = {
   restPrimary: 120,
   restAccessory: 90,
   units: 'kg',
+  keepAwake: true,
 };
 
 type SeedExercise = Omit<Exercise, 'order' | 'measure' | 'perSide' | 'archived'> &

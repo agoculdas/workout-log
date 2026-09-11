@@ -47,6 +47,19 @@ deployed URL) — not the dev server.
 
 Once installed it launches full-screen, portrait, and works with the phone in aeroplane mode.
 
+## Gym-friendly extras
+
+- **The screen stays on** while a session is open (Settings → During a session turns it off).
+- **Rest-timer notification.** Phone timers freeze when the app is in the background, so the
+  end of a rest also fires a "Rest over" notification — allow it from Settings, or on your first
+  logged set. Coming back to the app replays the beep if you missed it. On iOS notifications only
+  work once the app is installed to the home screen (iOS 16.4+).
+- **Persistent storage** is requested at launch, so the browser will not evict the log when space
+  runs low. Settings → About shows whether it was granted.
+- **Past sessions are editable.** History → expand a session → expand an exercise to correct or
+  delete any set, and edit the session note. Each session also stores its exercises as they were
+  prescribed that day, so renaming or reordering on the Programme tab never rewrites history.
+
 ## Backup and restore
 
 Everything lives in this browser's IndexedDB — clearing site data or deleting the app deletes the

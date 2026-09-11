@@ -65,8 +65,11 @@ export function formatClock(seconds: number): string {
 }
 
 export interface RestTimerOptions {
-  /** Fired once, the first tick at or after zero. Vibrate/beep hangs off this. */
-  onZero?: () => void;
+  /**
+   * Fired once per rest, on the first tick at or after zero, with the `endsAt`
+   * it fired for. Vibrate/beep/notify hangs off this.
+   */
+  onZero?: (endsAt: number) => void;
   /** Override the tick cadence (tests). */
   tickMs?: number;
   /** Override the clock (tests). */
@@ -82,8 +85,14 @@ export interface RestTimerCore {
   extend: (seconds: number) => void;
   /** Clear the timer and hide the bar. */
   skip: () => void;
+  /**
+   * Recompute now instead of waiting for the next tick, and return the fresh
+   * state. Fires a pending `onZero`, so a tab that comes back after its
+   * intervals were frozen catches up the moment it is visible again.
+   */
+  poll: () => RestTimerState;
   /** Swap the zero callback (the React binding keeps this fresh). */
-  setOnZero: (fn: (() => void) | undefined) => void;
+  setOnZero: (fn: ((endsAt: number) => void) | undefined) => void;
 }
 
 /**
@@ -147,8 +156,9 @@ export function createRestTimer(options: RestTimerOptions = {}): RestTimerCore {
     }
     const now = clock();
     if (now >= endsAt && firedFor !== endsAt) {
-      firedFor = endsAt;
-      onZero?.();
+      const firedAt = endsAt;
+      firedFor = firedAt;
+      onZero?.(firedAt);
     }
     if (now >= endsAt + AUTO_DISMISS_MS) {
       endsAt = null;
@@ -200,6 +210,10 @@ export function createRestTimer(options: RestTimerOptions = {}): RestTimerCore {
       stopInterval();
       sync();
     },
+    poll() {
+      tick();
+      return state;
+    },
   };
 }
 
@@ -207,6 +221,7 @@ export interface RestTimerHandle extends RestTimerState {
   start: (seconds: number) => void;
   extend: (seconds: number) => void;
   skip: () => void;
+  poll: () => RestTimerState;
 }
 
 /**
@@ -216,7 +231,7 @@ export interface RestTimerHandle extends RestTimerState {
  *
  * @param onZero called when the countdown reaches zero (vibrate + beep).
  */
-export function useRestTimer(onZero?: () => void): RestTimerHandle {
+export function useRestTimer(onZero?: (endsAt: number) => void): RestTimerHandle {
   // Lazy initialiser: exactly one timer for the lifetime of the component.
   const [core] = useState<RestTimerCore>(() => createRestTimer());
 
@@ -231,6 +246,7 @@ export function useRestTimer(onZero?: () => void): RestTimerHandle {
     start: core.start,
     extend: core.extend,
     skip: core.skip,
+    poll: core.poll,
   };
 }
 

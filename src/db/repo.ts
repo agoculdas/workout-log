@@ -11,6 +11,7 @@ import type {
   BodyweightEntry,
   Exercise,
   ExerciseSessionHistory,
+  ExerciseSnapshot,
   ExportBundle,
   ImportCounts,
   Session,
@@ -22,9 +23,17 @@ import type {
 
 /* ------------------------------------------------------------------ settings */
 
+/**
+ * Fills in fields a row written by an older version of the app never had, so
+ * adding a setting never needs a schema bump or a migration.
+ */
+function withDefaults(row: Settings): Settings {
+  return { ...DEFAULT_SETTINGS, ...row, id: 'settings' };
+}
+
 export async function getSettings(): Promise<Settings> {
   const found = await db.settings.get('settings');
-  if (found) return found;
+  if (found) return withDefaults(found);
   const fresh = { ...DEFAULT_SETTINGS };
   await db.settings.put(fresh);
   return fresh;
@@ -35,7 +44,8 @@ export async function getSettings(): Promise<Settings> {
  * write would retrigger the query it lives in.
  */
 export async function readSettings(): Promise<Settings | undefined> {
-  return db.settings.get('settings');
+  const found = await db.settings.get('settings');
+  return found ? withDefaults(found) : undefined;
 }
 
 export async function updateSettings(
@@ -156,12 +166,32 @@ export async function archiveExercise(id: string, archived = true): Promise<void
 
 /* ------------------------------------------------------------------ sessions */
 
-/** Starts (and persists) a new session. Partial sessions are saved as you go. */
+/** The nine prescription fields a session freezes for each of its exercises. */
+export function exerciseSnapshot(exercise: Exercise): ExerciseSnapshot {
+  return {
+    id: exercise.id,
+    name: exercise.name,
+    sets: exercise.sets,
+    repMin: exercise.repMin,
+    repMax: exercise.repMax,
+    measure: exercise.measure,
+    perSide: exercise.perSide,
+    unit: exercise.unit,
+    type: exercise.type,
+  };
+}
+
+/**
+ * Starts (and persists) a new session. Partial sessions are saved as you go.
+ * The template's current exercises are snapshotted into the row, so editing
+ * the Programme mid-session cannot reorder or rename what you are logging.
+ */
 export async function startSession(
   templateId: TemplateId,
   startedAt = Date.now(),
 ): Promise<Session> {
-  const session: Session = { id: newId(), templateId, startedAt };
+  const exercises = (await listExercises(templateId)).map(exerciseSnapshot);
+  const session: Session = { id: newId(), templateId, startedAt, exercises };
   await db.sessions.add(session);
   return session;
 }
@@ -212,12 +242,35 @@ export async function deleteSession(id: string): Promise<void> {
 export interface SessionDetail {
   session: Session;
   template: Template | undefined;
-  /** Template exercises in order, plus any archived one that has sets logged. */
+  /**
+   * The session's exercises in order: its snapshot when it has one, otherwise
+   * the template's live rows — plus any extra exercise that has sets logged.
+   */
   exercises: Exercise[];
   /** exerciseId -> that session's sets, sorted by setIndex. */
   setsByExercise: Record<string, SetLog[]>;
   /** Every set in the session, sorted by setIndex then time. */
   sets: SetLog[];
+}
+
+/**
+ * A snapshot rendered as a full `Exercise`: the frozen prescription wins, the
+ * live row supplies what a snapshot does not carry (increment, order) so the
+ * screens keep working with one shape.
+ */
+function fromSnapshot(
+  snapshot: ExerciseSnapshot,
+  live: Exercise | undefined,
+  templateId: TemplateId,
+  order: number,
+): Exercise {
+  return {
+    templateId: live?.templateId ?? templateId,
+    order: live?.order ?? order,
+    increment: live?.increment ?? 0,
+    archived: live?.archived,
+    ...snapshot,
+  };
 }
 
 export async function getSessionDetail(id: string): Promise<SessionDetail | undefined> {
@@ -230,7 +283,21 @@ export async function getSessionDetail(id: string): Promise<SessionDetail | unde
   ]);
   sets.sort((a, b) => a.setIndex - b.setIndex || a.completedAt - b.completedAt);
 
-  const exercises = [...templateExercises];
+  const snapshot = session.exercises;
+  let exercises: Exercise[];
+  if (snapshot?.length) {
+    const liveRows = await db.exercises.bulkGet(snapshot.map((s) => s.id));
+    const liveById = new Map<string, Exercise>();
+    liveRows.forEach((row) => {
+      if (row) liveById.set(row.id, row);
+    });
+    exercises = snapshot.map((snap, i) =>
+      fromSnapshot(snap, liveById.get(snap.id), session.templateId, i),
+    );
+  } else {
+    exercises = [...templateExercises];
+  }
+
   const known = new Set(exercises.map((e) => e.id));
   const extraIds = [...new Set(sets.map((s) => s.exerciseId))].filter((x) => !known.has(x));
   if (extraIds.length) {
@@ -474,7 +541,11 @@ export async function importMerge(json: unknown): Promise<ImportCounts> {
       await merge<Session>(
         db.sessions,
         pick('sessions'),
-        (r) => typeof r.templateId === 'string' && typeof r.startedAt === 'number',
+        // `exercises` is the per-session snapshot: optional, but an array if present.
+        (r) =>
+          typeof r.templateId === 'string' &&
+          typeof r.startedAt === 'number' &&
+          (r.exercises === undefined || Array.isArray(r.exercises)),
         'sessions',
       );
       await merge<SetLog>(

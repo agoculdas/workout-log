@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Button, Card, ConfirmDialog, PageHeader } from '../components';
+import { Button, Card, ConfirmDialog, PageHeader, Sheet } from '../components';
 import {
   deleteSession,
   getSessionDetail,
@@ -9,11 +9,14 @@ import {
   listExercises,
   listSessions,
   listTemplates,
+  updateSession,
 } from '../db/repo';
-import type { Session, SetLog } from '../db/types';
+import type { Exercise, Session, SetLog } from '../db/types';
 import { formatDate, formatSetSummary } from '../logic/format';
 import { totalVolume } from '../logic/volume';
 import { BodyweightSection } from './history/Bodyweight';
+import EditSetSheet from './history/EditSetSheet';
+import { formatSetLine } from './history/setLine';
 
 type Segment = 'sessions' | 'bodyweight';
 
@@ -157,6 +160,12 @@ function SessionsSection() {
   );
 }
 
+interface EditTarget {
+  exercise: Exercise;
+  set: SetLog;
+  setNumber: number;
+}
+
 function SessionDetail({
   sessionId,
   onDeleted,
@@ -166,46 +175,105 @@ function SessionDetail({
 }) {
   const detail = useLiveQuery(() => getSessionDetail(sessionId), [sessionId]);
   const [confirming, setConfirming] = useState(false);
+  const [openExercise, setOpenExercise] = useState<string | null>(null);
+  const [editing, setEditing] = useState<EditTarget | null>(null);
+  const [noteOpen, setNoteOpen] = useState(false);
 
   if (!detail) {
     return <div className="border-t border-border/60 px-4 py-3 text-sm text-muted">Loading…</div>;
   }
 
   const logged = detail.exercises.filter((e) => detail.setsByExercise[e.id]?.length);
+  const notes = detail.session.notes ?? '';
 
   return (
     <div className="border-t border-border/60 px-4 py-3">
       {logged.length ? (
-        <ul className="space-y-1">
-          {logged.map((exercise) => (
-            <li key={exercise.id} className="flex items-baseline gap-3">
-              <Link
-                to={`/history/${exercise.id}`}
-                className="min-w-0 flex-1 truncate text-sm text-accent underline-offset-2 active:underline"
-              >
-                {exercise.name}
-              </Link>
-              <span className="shrink-0 text-sm tabular-nums text-muted">
-                {formatSetSummary(exercise, detail.setsByExercise[exercise.id] ?? [])}
-              </span>
-            </li>
-          ))}
+        <ul className="divide-y divide-border/50">
+          {logged.map((exercise) => {
+            const sets = detail.setsByExercise[exercise.id] ?? [];
+            const open = openExercise === exercise.id;
+            return (
+              <li key={exercise.id}>
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  onClick={() => setOpenExercise((id) => (id === exercise.id ? null : exercise.id))}
+                  className="flex min-h-11 w-full items-center gap-3 py-1.5 text-left active:bg-surface-2"
+                >
+                  <span className="min-w-0 flex-1 truncate text-sm">{exercise.name}</span>
+                  <span className="shrink-0 text-sm tabular-nums text-muted">
+                    {formatSetSummary(exercise, sets)}
+                  </span>
+                  <Chevron open={open} />
+                </button>
+
+                {open ? (
+                  <div className="pb-2">
+                    <ul>
+                      {sets.map((set, i) => (
+                        <li key={set.id} className="flex items-center gap-3 text-sm">
+                          <span className="w-14 shrink-0 text-muted">Set {i + 1}</span>
+                          <span className="min-w-0 flex-1 truncate tabular-nums">
+                            {formatSetLine(exercise, set)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setEditing({ exercise, set, setNumber: i + 1 })}
+                            className="min-h-11 shrink-0 rounded-lg px-3 text-sm text-accent active:bg-surface-2"
+                          >
+                            Edit
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    <Link
+                      to={`/history/${exercise.id}`}
+                      className="mt-1 inline-flex min-h-11 items-center text-sm text-accent underline-offset-2 active:underline"
+                    >
+                      View all sessions →
+                    </Link>
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <p className="text-sm text-muted">No sets were logged in this session.</p>
       )}
 
-      {detail.session.notes ? (
+      {notes ? (
         <p className="mt-3 rounded-xl bg-surface-2 px-3 py-2 text-sm whitespace-pre-wrap text-muted">
-          {detail.session.notes}
+          {notes}
         </p>
       ) : null}
 
-      <div className="mt-3 flex justify-end">
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <Button variant="ghost" size="sm" onClick={() => setNoteOpen(true)}>
+          {notes ? 'Edit note' : 'Add note'}
+        </Button>
         <Button variant="ghost" size="sm" onClick={() => setConfirming(true)}>
           Delete session
         </Button>
       </div>
+
+      {editing ? (
+        <EditSetSheet
+          key={editing.set.id}
+          set={editing.set}
+          exercise={editing.exercise}
+          setNumber={editing.setNumber}
+          onClose={() => setEditing(null)}
+        />
+      ) : null}
+
+      <NoteSheet
+        open={noteOpen}
+        notes={notes}
+        onClose={() => setNoteOpen(false)}
+        onSave={(text) => void updateSession(sessionId, { notes: text || undefined })}
+      />
 
       <ConfirmDialog
         open={confirming}
@@ -220,6 +288,60 @@ function SessionDetail({
         }}
       />
     </div>
+  );
+}
+
+/** Edit the free-text note on a finished session. */
+function NoteSheet({
+  open,
+  notes,
+  onClose,
+  onSave,
+}: {
+  open: boolean;
+  notes: string;
+  onClose: () => void;
+  onSave: (text: string) => void;
+}) {
+  const [draft, setDraft] = useState(notes);
+  const [lastOpen, setLastOpen] = useState(open);
+  // Re-seed the textarea every time the sheet is opened.
+  if (open !== lastOpen) {
+    setLastOpen(open);
+    if (open) setDraft(notes);
+  }
+
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Session note"
+      footer={
+        <div className="flex gap-3">
+          <Button variant="secondary" full onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            full
+            onClick={() => {
+              onSave(draft.trim());
+              onClose();
+            }}
+          >
+            Save
+          </Button>
+        </div>
+      }
+    >
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={4}
+        placeholder="How did it feel?"
+        aria-label="Session note"
+        className="w-full rounded-2xl border border-border bg-surface-2 p-3 text-base text-fg outline-none focus:border-accent"
+      />
+    </Sheet>
   );
 }
 
