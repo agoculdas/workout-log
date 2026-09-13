@@ -93,7 +93,7 @@ export const PRESETS: ProgrammePreset[] = [
     days: [
       {
         name: 'Lower A',
-        tags: ['lower', 'legs'],
+        tags: ['lower'],
         exercises: [
           { catalogId: 'cat_hack_squat', sets: 4, repMin: 8, repMax: 10, type: 'primary' },
           { catalogId: 'cat_leg_press', sets: 3, repMin: 10, repMax: 12, type: 'primary' },
@@ -119,7 +119,7 @@ export const PRESETS: ProgrammePreset[] = [
       },
       {
         name: 'Lower B',
-        tags: ['lower', 'legs'],
+        tags: ['lower'],
         exercises: [
           { catalogId: 'cat_barbell_deadlift', sets: 4, repMin: 6, repMax: 8, type: 'primary' },
           { catalogId: 'cat_leg_extension', sets: 3, repMin: 12, repMax: 15, type: 'primary' },

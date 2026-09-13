@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './index.css';
 import App from './App';
 import { ensureSeeded } from './db/db';
+import { getActiveProgramme } from './db/repo';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('#root not found');
@@ -31,10 +32,14 @@ function requestPersistentStorage(): void {
   }
 }
 
-// Seed the programme before first paint so Today has something to show.
+// Seed the programme before first paint so Today has something to show, then
+// repair the active flag if an import or a half-finished delete lost it. The
+// screens only ever *read* which programme is active, so this is the one place
+// the repairing write can happen without retriggering a live query.
 ensureSeeded()
+  .then(() => getActiveProgramme())
   .catch((error: unknown) => {
-    console.error('Failed to seed the database', error);
+    console.error('Failed to prepare the database', error);
   })
   .finally(() => {
     requestPersistentStorage();

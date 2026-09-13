@@ -73,16 +73,32 @@ function endedAt(session: Session): number {
  * an older one falls back to the first occurrence of its template in the
  * rotation. No history at all starts at slot 0, and an empty rotation has no
  * slots to offer, so it returns -1 for the caller to handle.
+ *
+ * A `slotIndex` only means anything in the rotation it was stamped from, so a
+ * session that names *another* programme is resolved by its template instead —
+ * otherwise switching to a six-day PPL right after a Lower A would resume at
+ * slot 1 of the new rotation rather than starting it at the top. A session
+ * that names no programme at all (or a rotation shorter than the stamp) falls
+ * back the same way.
  */
 export function nextSlotIndex(
-  programme: Pick<Programme, 'rotation'> | undefined,
+  programme: Pick<Programme, 'id' | 'rotation'> | undefined,
   last: Session | undefined,
 ): number {
   const rotation = programme?.rotation ?? [];
   if (rotation.length === 0) return -1;
   if (!last) return 0;
 
-  if (typeof last.slotIndex === 'number' && last.slotIndex >= 0) {
+  const sameProgramme =
+    programme === undefined ||
+    last.programmeId === undefined ||
+    last.programmeId === programme.id;
+  if (
+    sameProgramme &&
+    typeof last.slotIndex === 'number' &&
+    last.slotIndex >= 0 &&
+    last.slotIndex < rotation.length
+  ) {
     return (last.slotIndex + 1) % rotation.length;
   }
 
@@ -122,6 +138,10 @@ function findClash(
  * @param recentCompleted completed sessions, newest first.
  * @param now          epoch ms, injected so this stays pure and testable.
  *
+ * The rotation resumes from the last session *this* programme logged; rest
+ * days and the clash rule read every recent session, whatever programme it
+ * belonged to, because a day off is a day off and tired legs are tired legs.
+ *
  * Rest slots elapse on their own. Count the rest slots between here and the
  * next training day (`k`) and how many calendar days have passed since the
  * last session (`d`). Each rest slot is a full calendar day: train Monday,
@@ -155,8 +175,10 @@ export function pickNextSession(
   };
 
   if (rotation.length === 0) {
+    // Empty rotation: offer the programme's own first day. `templates` may
+    // hold every programme's days (for the clash rule), so scope by programme.
     const first = templates
-      .filter((t) => !t.archived)
+      .filter((t) => !t.archived && (!programme || t.programmeId === programme.id))
       .slice()
       .sort((a, b) => a.order - b.order)[0];
     return first
@@ -164,7 +186,14 @@ export function pickNextSession(
       : { kind: 'rest', slotIndex: -1, restDay: 0, restTotal: 0 };
   }
 
-  const start = nextSlotIndex(programme, recentCompleted[0]);
+  // Where to resume: the last session *this* programme logged, so a spell on
+  // another split leaves the rotation where you left it rather than wherever
+  // the detour happened to end. Nothing of its own yet falls back to the
+  // newest session of any kind, which `nextSlotIndex` then resolves by day.
+  const resumeFrom =
+    (programme && recentCompleted.find((s) => s.programmeId === programme.id)) ??
+    recentCompleted[0];
+  const start = nextSlotIndex(programme, resumeFrom);
 
   /**
    * The first training slot at or after `from` whose day does not clash,

@@ -400,7 +400,9 @@ export function Session() {
     else navigate('/');
   }
 
-  const title = detail.template?.name ?? 'Session';
+  // The snapshot, not the live row: renaming or retiring the day on the
+  // Programme tab must not rewrite the session you are logging.
+  const title = detail.templateName;
 
   if (!exercise) {
     return (

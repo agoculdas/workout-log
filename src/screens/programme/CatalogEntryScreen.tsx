@@ -6,6 +6,7 @@ import {
   addExerciseFromCatalog,
   archiveCatalogEntry,
   getCatalogEntry,
+  listAllTemplates,
   listExercisesForCatalog,
   listTemplates,
 } from '../../db/repo';
@@ -46,6 +47,9 @@ export function CatalogEntryScreen() {
   );
   const uses = useLiveQuery(() => (id ? listExercisesForCatalog(id) : []), [id], []);
   const templates = useLiveQuery(() => listTemplates(), [], []);
+  // "Appears in" spans every programme, so its names cannot come from the
+  // active one's days alone — a row on another programme would print a raw id.
+  const allTemplates = useLiveQuery(() => listAllTemplates(), [], []);
 
   const [editOpen, setEditOpen] = useState(false);
   const [editSeq, setEditSeq] = useState(0);
@@ -59,7 +63,7 @@ export function CatalogEntryScreen() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const names = templateNames(templates);
+  const names = templateNames(allTemplates);
 
   const back = (
     <Link

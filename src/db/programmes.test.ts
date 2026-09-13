@@ -55,12 +55,9 @@ describe('seeded programme', () => {
     const days = await listTemplates();
     expect(days.map((t) => t.id)).toEqual(['lowerA', 'upperA', 'lowerB', 'upperB']);
     expect(days.every((t) => t.programmeId === SEED_PROGRAMME_ID)).toBe(true);
-    expect(days.map((t) => t.tags)).toEqual([
-      ['lower', 'legs'],
-      ['upper'],
-      ['lower', 'legs'],
-      ['upper'],
-    ]);
+    // Lower days carry the bare `lower` tag: `legs` would make them read
+    // "Legs" (see `dayKindLabel`) and stop them clashing with a PPL leg day.
+    expect(days.map((t) => t.tags)).toEqual([['lower'], ['upper'], ['lower'], ['upper']]);
   });
 
   it('is restored by wipeAll', async () => {
@@ -369,7 +366,7 @@ describe('presets', () => {
       { templateId: days[2]!.id },
       { rest: true },
     ]);
-    expect(rotationShape(built, days)).toBe('P · P · L · P · P · L · rest');
+    expect(rotationShape(built, days)).toBe('P · Pu · L · P · Pu · L · rest');
   });
 
   it('takes the prescription from the preset and everything else from the catalogue', async () => {
@@ -537,7 +534,7 @@ describe('backup with programmes', () => {
     const lower = await getTemplate('v2_lower');
     expect(lower).toMatchObject({
       programmeId: SEED_PROGRAMME_ID,
-      tags: ['lower', 'legs'],
+      tags: ['lower'],
       name: 'Old lower',
     });
     expect('kind' in lower!).toBe(false);

@@ -17,9 +17,9 @@ import type {
 export const SEED_PROGRAMME_ID = 'prog_upper_lower';
 
 export const SEED_TEMPLATES: Template[] = [
-  { id: 'lowerA', programmeId: SEED_PROGRAMME_ID, name: 'Lower A', tags: ['lower', 'legs'], order: 0, archived: false },
+  { id: 'lowerA', programmeId: SEED_PROGRAMME_ID, name: 'Lower A', tags: ['lower'], order: 0, archived: false },
   { id: 'upperA', programmeId: SEED_PROGRAMME_ID, name: 'Upper A', tags: ['upper'], order: 1, archived: false },
-  { id: 'lowerB', programmeId: SEED_PROGRAMME_ID, name: 'Lower B', tags: ['lower', 'legs'], order: 2, archived: false },
+  { id: 'lowerB', programmeId: SEED_PROGRAMME_ID, name: 'Lower B', tags: ['lower'], order: 2, archived: false },
   { id: 'upperB', programmeId: SEED_PROGRAMME_ID, name: 'Upper B', tags: ['upper'], order: 3, archived: false },
 ];
 

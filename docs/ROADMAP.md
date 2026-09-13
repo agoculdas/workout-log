@@ -9,14 +9,16 @@ Shipped and live at https://agoculdas.github.io/workout-log/:
 - **v1.0** — the original spec: 4-day upper/lower programme, double progression rule, stalled marker, session logger with rest timer, history + charts, programme editor, JSON backup, PWA.
 - **v1.1** — gym extras: screen wake lock, background rest notification, persistent storage, editing past sessions, per-session exercise snapshots.
 - **v1.2** — exercise library (44 movements with muscles, equipment, pattern, split tags), library-based add/swap, sets-per-muscle report with push:pull and squat:hinge balance.
+- **v1.3 (Phase 1, shipped 2026-09-13)** — warm-up sets, to-failure marker, per-exercise kg/lb, plate calculator, finish summary, quiet backup line, sets-per-muscle reference band, library rough edges.
+- **v2.0 (Phase 2, shipped 2026-09-13)** — programmes with rotations and rest days, user-defined days with split tags, several saved programmes with one active, five presets, same-kind clash rule, rest days that elapse per calendar day, Dexie v3 migration.
 
-216 tests. Verified on a real phone.
+423 tests. Verified on a real phone up to v1.2.
 
 **Effort scale used below.** S = a few files, under an hour of agent time. M = one agent session, a few hundred lines. L = multi-agent build with a schema migration, like the library was.
 
 ---
 
-## Phase 1 — Small wins and hardening
+## Phase 1 — Small wins and hardening (shipped)
 
 Low risk, no schema migration except new settings fields. One session of work for the whole phase.
 
@@ -46,7 +48,7 @@ Low risk, no schema migration except new settings fields. One session of work fo
 
 ---
 
-## Phase 2 — Custom programme structure (the big one)
+## Phase 2 — Custom programme structure (shipped)
 
 **Goal.** Run any split: push/pull/legs, body-part, full body, or your upper/lower. Today's four days and their order are hard-coded; the library tags were built so this can be data instead.
 
@@ -135,9 +137,9 @@ Low risk, no schema migration except new settings fields. One session of work fo
 
 ## Recommended order
 
-1. **Phase 1** in one go. Cheap, and 1.1 protects the data.
-2. **Phase 2.** The largest item and the one that unlocks the library tags.
-3. **3.2 PRs and 3.1 RIR**, then 3.3 and 3.4 as you feel the need.
+1. ~~Phase 1~~ shipped.
+2. ~~Phase 2~~ shipped.
+3. **3.2 PRs**, then 3.3 and 3.4 as you feel the need (3.1 RIR was replaced by the to-failure button).
 4. **4.1 supersets** if your programme uses them; the rest of Phase 4 on demand.
 5. **Phase 5** only when a concrete need appears.
 

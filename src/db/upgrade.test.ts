@@ -300,12 +300,9 @@ describe('v2 -> v3 upgrade', () => {
     const days = (await db3.templates.toArray()).sort((a, b) => a.order - b.order);
     expect(days.map((t) => t.id)).toEqual(['lowerA', 'upperA', 'lowerB', 'upperB']);
     expect(days.every((t) => t.programmeId === SEED_PROGRAMME_ID)).toBe(true);
-    expect(days.map((t) => t.tags)).toEqual([
-      ['lower', 'legs'],
-      ['upper'],
-      ['lower', 'legs'],
-      ['upper'],
-    ]);
+    // `kind: 'lower'` becomes the bare `lower` tag, so a migrated Lower A
+    // still clashes with Lower B and still reads "Lower", not "Legs".
+    expect(days.map((t) => t.tags)).toEqual([['lower'], ['upper'], ['lower'], ['upper']]);
     // The old discriminator is gone, not merely ignored.
     for (const day of days) expect('kind' in day).toBe(false);
 
@@ -417,7 +414,7 @@ describe('v2 -> v3 upgrade', () => {
     expect(fresh.verno).toBe(3);
     expect(await fresh.programmes.count()).toBe(1);
     expect((await fresh.programmes.get(SEED_PROGRAMME_ID))?.active).toBe(true);
-    expect((await fresh.templates.get('lowerA'))?.tags).toEqual(['lower', 'legs']);
+    expect((await fresh.templates.get('lowerA'))?.tags).toEqual(['lower']);
     expect((await fresh.templates.get('upperA'))?.programmeId).toBe(SEED_PROGRAMME_ID);
   });
 });

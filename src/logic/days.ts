@@ -45,18 +45,21 @@ export type DayKindLabel =
 /**
  * A one-word name for the day, for chips and the rotation strip.
  *
- * Priority, first match wins: a day that is both upper and lower is
- * "Full body"; push and pull beat the upper/lower pair (a PPL push day is
- * tagged `['upper','push']` and should read "Push", not "Upper"); `lower`
- * beats `upper`; `legs` alone is the last resort before "Day".
+ * Priority, first match wins: Full body → Push → Pull → Legs → Lower → Upper →
+ * "Day". A day that is both upper and lower is "Full body"; push and pull beat
+ * the upper/lower pair (a PPL push day is tagged `['upper','push']` and should
+ * read "Push", not "Upper"); `legs` beats `lower`, so a PPL or body-part legs
+ * day (`['lower','legs']`) reads "Legs" while a plain upper/lower leg day
+ * (`['lower']`) reads "Lower". That is why the stock programme and the
+ * `upper_lower_4` preset tag their lower days `['lower']` and nothing else.
  */
 export function dayKindLabel(t: Tagged): DayKindLabel {
   if (has(t, 'upper') && (has(t, 'lower') || has(t, 'legs'))) return 'Full body';
   if (has(t, 'push')) return 'Push';
   if (has(t, 'pull')) return 'Pull';
+  if (has(t, 'legs')) return 'Legs';
   if (has(t, 'lower')) return 'Lower';
   if (has(t, 'upper')) return 'Upper';
-  if (has(t, 'legs')) return 'Legs';
   return 'Day';
 }
 
@@ -79,10 +82,12 @@ function clashTags(tags: SplitTag[] | undefined): Set<SplitTag> {
  * Equality rather than overlap, deliberately. Push (`['upper','push']`) and
  * Pull (`['upper','pull']`) share `upper` but train nothing in common, and
  * running them on consecutive evenings — under 24 h apart — must not make the
- * picker skip one. Lower A and Lower B (both `['lower','legs']`) do clash, as
- * do a PPL Legs day and a plain Lower day, which is the rule's whole point.
- * Two identically tagged full-body days clash too; the all-clash fallback in
- * `pickNextSession` means the rotation simply wins there.
+ * picker skip one. Lower A and Lower B (both `['lower']`) do clash, which is
+ * the rule's whole point, and so do two Legs days (both `['lower','legs']`).
+ * A PPL Legs day and a stock Lower day do *not*, since their tag sets differ —
+ * acceptable, because they belong to different programmes and you are only
+ * ever running one. Two identically tagged full-body days clash too; the
+ * all-clash fallback in `pickNextSession` means the rotation simply wins there.
  */
 export function tagsClash(a: SplitTag[] | undefined, b: SplitTag[] | undefined): boolean {
   const left = clashTags(a);
@@ -96,7 +101,9 @@ export function tagsClash(a: SplitTag[] | undefined, b: SplitTag[] | undefined):
 /** The one- or two-letter abbreviation the rotation strip shows for a day. */
 export function dayShortLabel(t: Tagged): string {
   const label = dayKindLabel(t);
-  return label === 'Full body' ? 'FB' : label.slice(0, 1);
+  if (label === 'Full body') return 'FB';
+  if (label === 'Pull') return 'Pu'; // 'P' alone would collide with Push
+  return label.slice(0, 1);
 }
 
 /**

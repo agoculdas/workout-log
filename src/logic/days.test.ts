@@ -7,6 +7,7 @@ import {
   rotationShape,
   tagsClash,
 } from './days';
+import { PRESETS } from '../db/presets';
 import { SEED_TEMPLATES, seedProgramme } from '../db/seed';
 import type { SplitTag, Template } from '../db/types';
 
@@ -56,8 +57,25 @@ describe('isLowerDay / isUpperDay', () => {
 
 describe('dayKindLabel', () => {
   it('names the stock days Lower and Upper', () => {
-    expect(dayKindLabel(day(['lower', 'legs']))).toBe('Lower');
+    expect(dayKindLabel(day(['lower']))).toBe('Lower');
     expect(dayKindLabel(day(['upper']))).toBe('Upper');
+  });
+
+  it('prefers Legs over Lower, so a PPL leg day is not called Lower', () => {
+    expect(dayKindLabel(day(['lower', 'legs']))).toBe('Legs');
+    expect(dayKindLabel(day(['legs']))).toBe('Legs');
+  });
+
+  it('labels every seeded day and every preset day', () => {
+    expect(SEED_TEMPLATES.map(dayKindLabel)).toEqual(['Lower', 'Upper', 'Lower', 'Upper']);
+    const byPreset = Object.fromEntries(
+      PRESETS.map((preset) => [preset.id, preset.days.map(dayKindLabel)]),
+    );
+    expect(byPreset['upper_lower_4']).toEqual(['Lower', 'Upper', 'Lower', 'Upper']);
+    expect(byPreset['ppl_6']).toEqual(['Push', 'Pull', 'Legs']);
+    expect(byPreset['ppl_3']).toEqual(['Push', 'Pull', 'Legs']);
+    expect(byPreset['full_body_3']).toEqual(['Full body', 'Full body', 'Full body']);
+    expect(byPreset['body_part_5']).toEqual(['Push', 'Pull', 'Legs', 'Push', 'Push']);
   });
 
   it('prefers the PPL tag over the upper/lower one', () => {
@@ -70,13 +88,13 @@ describe('dayKindLabel', () => {
     expect(dayKindLabel(day(['upper', 'legs']))).toBe('Full body');
   });
 
-  it('falls back to Legs, then to Day', () => {
-    expect(dayKindLabel(day(['legs']))).toBe('Legs');
+  it('falls back to Day when nothing says which half of the body it is', () => {
     expect(dayKindLabel(day(['core']))).toBe('Day');
     expect(dayKindLabel(day([]))).toBe('Day');
   });
 
   it('abbreviates to one letter, or FB for full body', () => {
+    expect(dayShortLabel(day(['lower']))).toBe('L');
     expect(dayShortLabel(day(['lower', 'legs']))).toBe('L');
     expect(dayShortLabel(day(['upper']))).toBe('U');
     expect(dayShortLabel(day(['upper', 'push']))).toBe('P');
@@ -86,7 +104,9 @@ describe('dayKindLabel', () => {
 
 describe('tagsClash', () => {
   it('is true only when the two days are the same kind of day', () => {
-    // Lower A and Lower B, or a PPL Legs day and a plain Lower day.
+    // Lower A and Lower B, identically tagged.
+    expect(tagsClash(['lower'], ['lower'])).toBe(true);
+    // Two PPL legs days, in either tag order.
     expect(tagsClash(['lower', 'legs'], ['lower', 'legs'])).toBe(true);
     expect(tagsClash(['legs', 'lower'], ['lower', 'legs'])).toBe(true);
     // Two identically tagged full-body days.
@@ -99,7 +119,8 @@ describe('tagsClash', () => {
     expect(tagsClash(['upper', 'push'], ['upper', 'pull'])).toBe(false);
     // Chest and Shoulders share `upper` and `push`.
     expect(tagsClash(['upper', 'push', 'chest'], ['upper', 'push', 'shoulders'])).toBe(false);
-    // A subset is not the same day either.
+    // A subset is not the same day either: a PPL Legs day and a stock Lower
+    // day belong to different programmes, and only one is ever running.
     expect(tagsClash(['lower', 'legs'], ['lower'])).toBe(false);
   });
 

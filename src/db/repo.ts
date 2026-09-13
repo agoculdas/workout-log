@@ -5,7 +5,7 @@
  *
  *   const exercises = useLiveQuery(() => listExercises('lowerA'), ['lowerA']);
  */
-import { db, newId, type WorkoutDB } from './db';
+import { db, newId, tagsFromKind, type WorkoutDB } from './db';
 import {
   DEFAULT_SETTINGS,
   SEED_CATALOG,
@@ -126,11 +126,16 @@ export async function getProgramme(id: string): Promise<Programme | undefined> {
 }
 
 /**
- * Which programme is in charge, without writing anything - safe inside
+ * Which programme is in charge, without writing anything — safe inside
  * `useLiveQuery`, where a write would retrigger the query it lives in. Falls
  * back to the newest non-archived programme when the flag has gone missing;
- * `getActiveProgramme` is the one that repairs it.
+ * `getActiveProgramme` is the one that repairs it. This is what screens read;
+ * `getActiveProgramme` belongs in action handlers and at start-up.
  */
+export async function readActiveProgramme(): Promise<Programme | undefined> {
+  return resolveActiveProgramme();
+}
+
 async function resolveActiveProgramme(): Promise<Programme | undefined> {
   const rows = (await db.programmes.toArray()).filter((p) => !p.archived);
   if (!rows.length) return undefined;
@@ -1447,12 +1452,9 @@ export async function importMerge(json: unknown): Promise<ImportCounts> {
             row.programmeId = fallbackProgrammeId;
           }
           if (!Array.isArray(row.tags)) {
-            row.tags =
-              legacy.kind === 'lower'
-                ? ['lower', 'legs']
-                : legacy.kind === 'upper'
-                  ? ['upper']
-                  : [];
+            row.tags = tagsFromKind(
+              legacy.kind === 'lower' || legacy.kind === 'upper' ? legacy.kind : undefined,
+            );
           }
           return row;
         }),

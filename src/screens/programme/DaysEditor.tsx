@@ -1,23 +1,32 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Button, ConfirmDialog, SegmentedControl } from '../../components';
+import { Button, ConfirmDialog, IconButton, SegmentedControl } from '../../components';
 import {
   addExerciseFromCatalog,
   archiveExercise,
+  archiveTemplate,
+  createTemplate,
   getCatalogEntriesByIds,
   listExercises,
   listTemplates,
+  readActiveProgramme,
   readSettings,
   reorderExercises,
+  reorderTemplates,
+  updateTemplate,
   upsertExercise,
 } from '../../db/repo';
-import type { CatalogEntry, Exercise, MassUnit } from '../../db/types';
+import type { CatalogEntry, Exercise, MassUnit, SplitTag } from '../../db/types';
 import { formatPrescription } from '../../logic/format';
 import { defaultIncrement, exerciseMassUnit } from '../../logic/units';
+import DaySheet from './DaySheet';
 import ExerciseSheet from './ExerciseSheet';
 import LibraryPickerSheet from './LibraryPickerSheet';
 import { draftToInput, incrementLabel, unitLabel, type ExerciseDraft } from './exerciseForm';
 import { muscleList, swapOverrides } from './libraryUtils';
+
+/** Sentinel for the trailing "+" tab — never a real day id. */
+const ADD_DAY = '__add_day__';
 
 const TYPE_BADGE: Record<Exercise['type'], string> = {
   primary: 'bg-accent/15 text-accent',
@@ -92,13 +101,24 @@ function ExerciseRow({ exercise, muscles, first, last, onEdit, onMove }: RowProp
   );
 }
 
+export interface DaysEditorProps {
+  /** Opens the Programmes sheet — the empty state's "start from a preset". */
+  onOpenProgrammes?: (section?: 'list' | 'presets') => void;
+}
+
 /**
- * Edit the four fixed programme days: rename, retarget, reorder, add, retire
- * and swap exercises. Everything is a soft change — logged sets are never
- * rewritten, so history keeps resolving old names.
+ * Edit the active programme's days: add, rename, retag, reorder and delete the
+ * days themselves, and rename, retarget, reorder, add, retire and swap the
+ * exercises on the selected one. Everything is a soft change — logged sets are
+ * never rewritten, so history keeps resolving old names.
  */
-export function DaysEditor() {
-  const templates = useLiveQuery(() => listTemplates(), [], []);
+export function DaysEditor({ onOpenProgrammes }: DaysEditorProps = {}) {
+  // Reads the programmes table too, so activating another programme swaps the
+  // day tabs live without this screen knowing anything about it.
+  const programme = useLiveQuery(() => readActiveProgramme().then((p) => p ?? null), []);
+  // `undefined` until Dexie answers, so the empty state never flashes first.
+  const dayRows = useLiveQuery(() => listTemplates(), []);
+  const templates = dayRows ?? [];
   const [picked, setPicked] = useState<string>('');
   // Days are user-defined now, so there is no id to hard-code: the selection
   // falls back to the active programme's first day until one is chosen.
@@ -140,6 +160,48 @@ export function DaysEditor() {
   const [picker, setPicker] = useState<PickerMode | null>(null);
   const [pendingLink, setPendingLink] = useState<CatalogEntry | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [dayMode, setDayMode] = useState<'new' | 'edit' | null>(null);
+  const [daySeq, setDaySeq] = useState(0);
+  const [confirmDeleteDay, setConfirmDeleteDay] = useState(false);
+
+  const day = templates.find((t) => t.id === templateId);
+  const dayIndex = templates.findIndex((t) => t.id === templateId);
+
+  const openDaySheet = (mode: 'new' | 'edit') => {
+    setDaySeq((n) => n + 1);
+    setDayMode(mode);
+  };
+
+  const saveDay = async (input: { name: string; tags: SplitTag[] }) => {
+    if (dayMode === 'new') {
+      if (!programme) return;
+      const created = await createTemplate(programme.id, input);
+      setPicked(created.id);
+    } else if (day) {
+      await updateTemplate(day.id, input);
+    }
+    setDayMode(null);
+  };
+
+  const moveDay = async (direction: -1 | 1) => {
+    if (!programme) return;
+    const target = dayIndex + direction;
+    if (dayIndex < 0 || target < 0 || target >= templates.length) return;
+    const ids = templates.map((t) => t.id);
+    const moved = ids[dayIndex]!;
+    ids[dayIndex] = ids[target]!;
+    ids[target] = moved;
+    await reorderTemplates(programme.id, ids);
+  };
+
+  const removeDay = async () => {
+    setConfirmDeleteDay(false);
+    setDayMode(null);
+    if (!day) return;
+    await archiveTemplate(day.id);
+    // The selection falls back to the first remaining day on its own.
+    setPicked('');
+  };
 
   const editing = editingId
     ? (freshRow?.id === editingId ? freshRow : undefined) ??
@@ -245,15 +307,60 @@ export function DaysEditor() {
     setSheetSeq((n) => n + 1);
   };
 
+  if (dayRows === undefined) return null;
+
+  if (templates.length === 0) {
+    return (
+      <div className="px-4 py-10 text-center">
+        <p className="text-base text-fg">No days yet</p>
+        <p className="mt-1 text-sm text-muted">
+          A day is a name and its split tags; the exercises go on it next.
+        </p>
+        <div className="mx-auto mt-5 flex max-w-xs flex-col gap-3">
+          <Button full disabled={!programme} onClick={() => openDaySheet('new')}>
+            Add a day
+          </Button>
+          <Button full variant="secondary" onClick={() => onOpenProgrammes?.('presets')}>
+            Start from a preset
+          </Button>
+        </div>
+
+        <DaySheet
+          key={`new:${daySeq}`}
+          open={dayMode === 'new'}
+          onSave={(input) => void saveDay(input)}
+          onClose={() => setDayMode(null)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div>
-      <div className="px-4 pb-2">
+      {/* Lives here rather than in `Programme` so the empty state above, which
+          has nothing to tap, never gets a line telling you to tap it. */}
+      <p className="px-4 pb-2 text-xs text-muted">
+        Tap an exercise to edit it. Changes apply to future sessions only.
+      </p>
+
+      <div className="flex items-center gap-2 px-4 pb-2">
         <SegmentedControl
+          className="min-w-0 flex-1"
           label="Programme day"
           value={templateId}
-          onChange={setPicked}
-          options={templates.map((t) => ({ value: t.id, label: t.name }))}
+          onChange={(value) => (value === ADD_DAY ? openDaySheet('new') : setPicked(value))}
+          options={[
+            ...templates.map((t) => ({ value: t.id, label: t.name })),
+            { value: ADD_DAY, label: '+' },
+          ]}
         />
+        <IconButton
+          label={`Edit ${day?.name ?? 'day'}`}
+          disabled={!day}
+          onClick={() => openDaySheet('edit')}
+        >
+          ✎
+        </IconButton>
       </div>
 
       <ul className="mt-2 border-y border-border/60 bg-surface/40">
@@ -382,6 +489,27 @@ export function DaysEditor() {
         onConfirm={() => void applyLink(true)}
         onCancel={() => void applyLink(false)}
         onDismiss={() => setPendingLink(null)}
+      />
+
+      <DaySheet
+        key={`${dayMode ?? 'closed'}:${templateId}:${daySeq}`}
+        open={dayMode !== null}
+        day={dayMode === 'edit' ? day : undefined}
+        canMoveEarlier={dayIndex > 0}
+        canMoveLater={dayIndex >= 0 && dayIndex < templates.length - 1}
+        onMove={(direction) => void moveDay(direction)}
+        onDelete={() => setConfirmDeleteDay(true)}
+        onSave={(input) => void saveDay(input)}
+        onClose={() => setDayMode(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteDay}
+        title={`Delete ${day?.name ?? 'day'}?`}
+        message={`Removes ${day?.name ?? 'this day'} from this programme and its rotation. Past sessions keep their history.`}
+        confirmLabel="Delete day"
+        onConfirm={() => void removeDay()}
+        onCancel={() => setConfirmDeleteDay(false)}
       />
 
       <ConfirmDialog

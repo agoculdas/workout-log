@@ -9,3 +9,4 @@ export {
   type SegmentedOption,
 } from './SegmentedControl';
 export { Sheet, ConfirmDialog, type SheetProps, type ConfirmDialogProps } from './Sheet';
+export { IconButton, type IconButtonProps, type IconButtonVariant } from './IconButton';

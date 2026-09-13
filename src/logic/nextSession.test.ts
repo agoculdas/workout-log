@@ -59,6 +59,25 @@ describe('nextSlotIndex', () => {
     expect(nextSlotIndex(stock, done('gone', NOW))).toBe(0);
   });
 
+  it('ignores a slotIndex stamped from another programme', () => {
+    // Switching programmes: the stamp indexes a rotation this one has never
+    // seen, and the day it names is not in this rotation either, so the walk
+    // starts at the top instead of at slot 1.
+    const foreign: Session = { ...done('legsA', NOW, 0), programmeId: 'ppl' };
+    expect(nextSlotIndex(stock, foreign)).toBe(0);
+    // A session of this programme still resolves by its stamp.
+    expect(
+      nextSlotIndex(stock, { ...done('lowerA', NOW, 3), programmeId: stock.id }),
+    ).toBe(4);
+  });
+
+  it('ignores a slotIndex the rotation is now too short for', () => {
+    // The rotation was trimmed after the session was logged.
+    expect(nextSlotIndex(programme([{ templateId: 'a' }, { rest: true }]), done('a', NOW, 5))).toBe(
+      1,
+    );
+  });
+
   it('returns -1 for an empty rotation', () => {
     expect(nextSlotIndex(programme([]), undefined)).toBe(-1);
     expect(nextSlotIndex(undefined, undefined)).toBe(-1);
@@ -326,6 +345,33 @@ describe('pickNextSession — the clash rule', () => {
     expect(pick.reason).toContain('Leg day');
   });
 
+  it('resumes from the last session of this programme, not the detour', () => {
+    // Upper / Lower, Lower A done (slot 0), then a spell on another split.
+    const foreign = day('legsA', 'Legs A', ['legs'], 0);
+    const detour: Session = { ...done('legsA', NOW - 2 * DAY, 0), programmeId: 'ppl' };
+    const mine: Session = {
+      ...done('lowerA', NOW - 3 * DAY, 0),
+      programmeId: stock.id,
+    };
+    expect(
+      pickNextSession(stock, [...stockDays, foreign], [detour, mine], NOW),
+    ).toMatchObject({ kind: 'train', templateId: 'upperA', slotIndex: 1 });
+  });
+
+  it('does not clash a PPL Legs day with a stock Lower day', () => {
+    // Different tag sets (`['lower','legs']` vs `['lower']`), and they belong
+    // to different programmes, so only one of them is ever being run.
+    const stockLower: Template = { ...day('lowerA', 'Lower A', ['lower'], 0), programmeId: 'p2' };
+    const pick = pickNextSession(
+      programme([{ templateId: 'legsA' }, { templateId: 'push' }]),
+      [legs, push, stockLower],
+      [done('lowerA', NOW - LAST_NIGHT)],
+      NOW,
+    );
+    expect(pick).toMatchObject({ kind: 'train', templateId: 'legsA', slotIndex: 0 });
+    expect(pick.reason).toBeUndefined();
+  });
+
   it('ignores a session whose day cannot be resolved at all', () => {
     const pick = pickNextSession(
       programme([{ templateId: 'legsA' }, { templateId: 'push' }]),
@@ -506,6 +552,24 @@ describe('pickNextSession — empty and broken rotations', () => {
       kind: 'train',
       templateId: 'a',
       slotIndex: -1,
+    });
+  });
+
+  it('never offers a day from another programme when the rotation is empty', () => {
+    // `templates` carries every programme's days for the clash rule; the
+    // fallback must stay inside the active programme.
+    const other: Template = { ...day('x', 'X', ['push'], 0), programmeId: 'p2' };
+    const own = day('a', 'A', ['lower'], 5);
+    expect(pickNextSession(programme([]), [other, own], [], NOW)).toEqual({
+      kind: 'train',
+      templateId: 'a',
+      slotIndex: -1,
+    });
+    expect(pickNextSession(programme([]), [other], [], NOW)).toEqual({
+      kind: 'rest',
+      slotIndex: -1,
+      restDay: 0,
+      restTotal: 0,
     });
   });
 

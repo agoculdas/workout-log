@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Button, Card, ConfirmDialog, NumberField, PageHeader } from '../components';
-import { exportAll, importMerge, markExported, updateSettings, wipeAll } from '../db/repo';
+import {
+  exportAll,
+  importMerge,
+  listTemplates,
+  markExported,
+  readActiveProgramme,
+  updateSettings,
+  wipeAll,
+} from '../db/repo';
+import { rotationShape } from '../logic/days';
 import { formatDate, formatNumber } from '../logic/format';
 import useSettings from '../hooks/useSettings';
 import type { MassUnit } from '../db/types';
@@ -197,6 +207,13 @@ export function Settings() {
   const settings = useSettings();
   const install = useInstallPrompt();
   const fileRef = useRef<HTMLInputElement>(null);
+
+  /** What Today is walking: the active programme's name and its week shape. */
+  const programme = useLiveQuery(async () => {
+    const active = await readActiveProgramme();
+    if (!active) return undefined;
+    return { name: active.name, shape: rotationShape(active, await listTemplates(active.id)) };
+  }, []);
 
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState(false);
@@ -572,7 +589,7 @@ export function Settings() {
             Wipe all data
           </Button>
           <p className="mt-2 text-xs text-muted">
-            Deletes every session and set, then re-seeds the stock programme.
+            Deletes every session, set and programme, then re-seeds the stock one.
           </p>
         </div>
       </Section>
@@ -582,6 +599,16 @@ export function Settings() {
           <div className="flex justify-between gap-3">
             <dt className="text-muted">Version</dt>
             <dd className="tabular-nums">{APP_VERSION}</dd>
+          </div>
+          <div>
+            <dt className="text-muted">Active programme</dt>
+            <dd className="mt-0.5 break-words">
+              {programme === undefined
+                ? '—'
+                : programme.shape
+                  ? `${programme.name} · ${programme.shape}`
+                  : programme.name}
+            </dd>
           </div>
           <div className="flex justify-between gap-3">
             <dt className="text-muted">Storage used</dt>
@@ -639,7 +666,7 @@ export function Settings() {
       <ConfirmDialog
         open={confirmWipe}
         title="Wipe all data?"
-        message="This deletes every session and set. Export first."
+        message="This deletes every session, set and programme. Export first."
         confirmLabel="Wipe everything"
         onConfirm={() => void wipe()}
         onCancel={() => setConfirmWipe(false)}

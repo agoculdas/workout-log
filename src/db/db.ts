@@ -199,9 +199,15 @@ interface LegacyTemplate extends Partial<Template> {
   kind?: 'lower' | 'upper';
 }
 
-/** `kind: 'lower'` meant legs; `kind: 'upper'` meant everything above them. */
-function tagsFromKind(kind: 'lower' | 'upper' | undefined): SplitTag[] {
-  if (kind === 'lower') return ['lower', 'legs'];
+/**
+ * `kind: 'lower'` becomes the bare `lower` tag and `kind: 'upper'` the bare
+ * `upper` one — the same tags the stock seed and the `upper_lower_4` preset
+ * use, so a migrated Lower A still clashes with a migrated Lower B and still
+ * reads "Lower" rather than "Legs" (see `dayKindLabel`). Shared with the
+ * import path in `repo.ts`, which accepts v2 bundles carrying `kind`.
+ */
+export function tagsFromKind(kind: 'lower' | 'upper' | undefined): SplitTag[] {
+  if (kind === 'lower') return ['lower'];
   if (kind === 'upper') return ['upper'];
   return [];
 }

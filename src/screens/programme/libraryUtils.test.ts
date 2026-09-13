@@ -36,9 +36,9 @@ function makeEntry(patch: Partial<CatalogEntry> = {}): CatalogEntry {
 }
 
 const TEMPLATES: Template[] = [
-  { id: 'lowerA', programmeId: 'p1', name: 'Lower A', tags: ['lower', 'legs'], order: 0 },
+  { id: 'lowerA', programmeId: 'p1', name: 'Lower A', tags: ['lower'], order: 0 },
   { id: 'upperA', programmeId: 'p1', name: 'Upper A', tags: ['upper'], order: 1 },
-  { id: 'lowerB', programmeId: 'p1', name: 'Lower B', tags: ['lower', 'legs'], order: 2 },
+  { id: 'lowerB', programmeId: 'p1', name: 'Lower B', tags: ['lower'], order: 2 },
   { id: 'upperB', programmeId: 'p1', name: 'Upper B', tags: ['upper'], order: 3 },
 ];
 

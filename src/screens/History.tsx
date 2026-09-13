@@ -6,14 +6,16 @@ import {
   deleteSession,
   getSessionDetail,
   listAllSetLogs,
+  listAllTemplates,
   listExercises,
+  listProgrammes,
   listSessions,
   listTemplates,
   updateSession,
 } from '../db/repo';
 import type { Exercise, Session, SetLog } from '../db/types';
 import { formatDate, formatSetSummary, formatVolumeKg } from '../logic/format';
-import { totalVolumeKg } from '../logic/volume';
+import { setCount, totalVolumeKg } from '../logic/volume';
 import { BodyweightSection } from './history/Bodyweight';
 import EditSetSheet from './history/EditSetSheet';
 import { MusclesSection } from './history/Muscles';
@@ -74,6 +76,7 @@ export function History() {
 interface SessionRow {
   session: Session;
   templateName: string;
+  /** Working sets only, so the count and the volume beside it agree. */
   setCount: number;
   /** Working-set volume in kilograms — lb sets converted, so the total adds up. */
   volumeKg: number;
@@ -83,7 +86,10 @@ function SessionsSection() {
   const rows = useLiveQuery(async () => {
     const [sessions, templates, sets] = await Promise.all([
       listSessions(false),
-      listTemplates(),
+      // Every day, whatever programme it belongs to and whether or not it is
+      // archived: a session started before snapshots existed still has to
+      // resolve its name from somewhere.
+      listAllTemplates(),
       listAllSetLogs(),
     ]);
     const nameById = new Map(templates.map((t) => [t.id, t.name]));
@@ -97,8 +103,10 @@ function SessionsSection() {
       const own = bySession.get(session.id) ?? [];
       return {
         session,
-        templateName: nameById.get(session.templateId) ?? session.templateId,
-        setCount: own.length,
+        // The snapshot wins: a renamed or deleted day never rewrites history.
+        templateName:
+          session.templateName ?? nameById.get(session.templateId) ?? session.templateId,
+        setCount: setCount(own),
         volumeKg: totalVolumeKg(own),
       };
     });
@@ -373,16 +381,60 @@ function NoteSheet({
 
 /* ----------------------------------------------------------- exercise index */
 
-/** Every exercise, grouped by day — a chart is one tap away without expanding. */
+interface IndexGroup {
+  key: string;
+  label: string;
+  exercises: Exercise[];
+}
+
+/**
+ * Every exercise, grouped by day — a chart is one tap away without expanding.
+ *
+ * The active programme's days come first, one group each, then a collapsed
+ * "Other programmes" block with a group per saved programme you are not
+ * running, so their charts stay reachable. Archived days are left out
+ * deliberately: their exercises are still one tap away from a session row.
+ */
 function ExerciseIndex({ className = '' }: { className?: string }) {
   const [open, setOpen] = useState(false);
-  const groups = useLiveQuery(async () => {
-    const [templates, exercises] = await Promise.all([listTemplates(), listExercises()]);
-    return templates.map((template) => ({
-      template,
-      exercises: exercises.filter((e) => e.templateId === template.id),
+  const [othersOpen, setOthersOpen] = useState(false);
+
+  const index = useLiveQuery(async (): Promise<{ days: IndexGroup[]; others: IndexGroup[] }> => {
+    const [programmes, templates, allTemplates] = await Promise.all([
+      listProgrammes(),
+      listTemplates(),
+      listAllTemplates(false),
+    ]);
+    const byTemplate = new Map<string, Exercise[]>(
+      await Promise.all(
+        allTemplates.map(
+          async (t): Promise<[string, Exercise[]]> => [t.id, await listExercises(t.id)],
+        ),
+      ),
+    );
+
+    const days: IndexGroup[] = templates.map((template) => ({
+      key: template.id,
+      label: template.name,
+      exercises: byTemplate.get(template.id) ?? [],
     }));
+
+    const activeId = templates[0]?.programmeId ?? programmes.find((p) => p.active)?.id;
+    const others: IndexGroup[] = programmes
+      .filter((p) => p.id !== activeId)
+      .map((programme) => ({
+        key: programme.id,
+        label: programme.name,
+        exercises: allTemplates
+          .filter((t) => t.programmeId === programme.id)
+          .flatMap((t) => byTemplate.get(t.id) ?? []),
+      }))
+      .filter((group) => group.exercises.length > 0);
+
+    return { days, others };
   }, []);
+
+  const others = index?.others ?? [];
 
   return (
     <section className={className}>
@@ -398,29 +450,61 @@ function ExerciseIndex({ className = '' }: { className?: string }) {
       </button>
       {open ? (
         <div className="mt-2 space-y-4">
-          {(groups ?? []).map(({ template, exercises }) => (
-            <div key={template.id}>
-              <h3 className="mb-1 text-sm font-semibold">{template.name}</h3>
-              <Card flush>
-                <ul className="divide-y divide-border/60">
-                  {exercises.map((exercise) => (
-                    <li key={exercise.id}>
-                      <Link
-                        to={`/history/${exercise.id}`}
-                        className="flex min-h-12 items-center gap-3 px-4 py-2 text-sm active:bg-surface-2"
-                      >
-                        <span className="min-w-0 flex-1 truncate">{exercise.name}</span>
-                        <Chevron open={false} className="-rotate-90" />
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </Card>
-            </div>
+          {(index?.days ?? []).map((group) => (
+            <IndexSection key={group.key} group={group} />
           ))}
+
+          {others.length ? (
+            <div>
+              <button
+                type="button"
+                aria-expanded={othersOpen}
+                onClick={() => setOthersOpen((v) => !v)}
+                className="flex min-h-12 w-full items-center gap-2 text-xs font-semibold tracking-wide text-muted uppercase"
+              >
+                Other programmes
+                <span className="flex-1 border-t border-border/60" />
+                <Chevron open={othersOpen} />
+              </button>
+              {othersOpen ? (
+                <div className="mt-2 space-y-4">
+                  {others.map((group) => (
+                    <IndexSection key={group.key} group={group} />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </section>
+  );
+}
+
+/** One heading and its list of exercises, each linking to its chart. */
+function IndexSection({ group }: { group: IndexGroup }) {
+  return (
+    <div>
+      <h3 className="mb-1 text-sm font-semibold">{group.label}</h3>
+      <Card flush>
+        <ul className="divide-y divide-border/60">
+          {group.exercises.map((exercise) => (
+            <li key={exercise.id}>
+              <Link
+                to={`/history/${exercise.id}`}
+                className="flex min-h-12 items-center gap-3 px-4 py-2 text-sm active:bg-surface-2"
+              >
+                <span className="min-w-0 flex-1 truncate">{exercise.name}</span>
+                <Chevron open={false} className="-rotate-90" />
+              </Link>
+            </li>
+          ))}
+          {group.exercises.length === 0 ? (
+            <li className="px-4 py-2 text-sm text-muted">No exercises yet.</li>
+          ) : null}
+        </ul>
+      </Card>
+    </div>
   );
 }
 
