@@ -1,4 +1,6 @@
 import type { Exercise, SetLog } from '../db/types';
+import { workingSets } from './sets';
+import { exerciseMassUnit, massLabel } from './units';
 import { topSetLoad } from './volume';
 
 /** 2.5 -> "2.5", 70 -> "70", 70.0 -> "70". */
@@ -39,23 +41,52 @@ export function formatPrescription(exercise: Exercise): string {
 }
 
 /**
- * A load with its unit suffix:
- * kg_side -> "70 kg/hand", kg_total -> "70 kg", band -> "band",
- * bodyweight -> "BW" (or "BW +10 kg"), none -> "—".
+ * The suffix a load field shows for this exercise: "kg", "lb", "kg/hand",
+ * "lb/hand", "band", "BW" or "—". Reads the exercise's own denomination.
  */
-export function formatLoad(exercise: Exercise, load: number): string {
+export function formatMassUnit(
+  exercise: Pick<Exercise, 'unit' | 'massUnit'>,
+): 'kg' | 'lb' | 'kg/hand' | 'lb/hand' | 'band' | 'BW' | '—' {
+  const label = massLabel(exerciseMassUnit(exercise));
   switch (exercise.unit) {
     case 'kg_side':
-      return `${formatNumber(load)} kg/hand`;
+      return label === 'lb' ? 'lb/hand' : 'kg/hand';
     case 'kg_total':
-      return `${formatNumber(load)} kg`;
+      return label;
     case 'band':
-      return load ? `band ${formatNumber(load)}` : 'band';
+      return 'band';
     case 'bodyweight':
-      return load ? `BW +${formatNumber(load)} kg` : 'BW';
+      return 'BW';
     case 'none':
       return '—';
   }
+}
+
+/**
+ * A load with its unit suffix, in the exercise's own denomination:
+ * kg_side -> "70 kg/hand" or "30 lb/hand", kg_total -> "70 kg" / "70 lb",
+ * band -> "band", bodyweight -> "BW" (or "BW +10 kg"), none -> "—".
+ */
+export function formatLoad(exercise: Exercise, load: number): string {
+  const label = massLabel(exerciseMassUnit(exercise));
+  switch (exercise.unit) {
+    case 'kg_side':
+      return `${formatNumber(load)} ${label}/hand`;
+    case 'kg_total':
+      return `${formatNumber(load)} ${label}`;
+    case 'band':
+      return load ? `band ${formatNumber(load)}` : 'band';
+    case 'bodyweight':
+      return load ? `BW +${formatNumber(load)} ${label}` : 'BW';
+    case 'none':
+      return '—';
+  }
+}
+
+/** "1,240 kg" — a session or window total, always in kilograms. */
+export function formatVolumeKg(kg: number): string {
+  if (!Number.isFinite(kg)) return '0 kg';
+  return `${Math.round(kg).toLocaleString('en-GB')} kg`;
 }
 
 /** Pulls "1 km" / "500 m" out of an exercise name, for conditioning summaries. */
@@ -65,11 +96,12 @@ function distanceFromName(name: string): string | undefined {
 }
 
 /**
- * One-line summary of what was logged, e.g.
- * "4×8 @ 70", "4×8–10 @ 70" (mixed reps), "3×45s", "3 laps @ 30", "1 km in 4:12".
- * Returns "—" when nothing was logged.
+ * One-line summary of the working sets, e.g. "4×8 @ 70 kg",
+ * "4×8–10 @ 70 kg" (mixed reps), "3×45s", "3 laps @ 30 lb", "1 km in 4:12".
+ * Warm-ups are ignored; returns "—" when nothing working was logged.
  */
-export function formatSetSummary(exercise: Exercise, sets: SetLog[]): string {
+export function formatSetSummary(exercise: Exercise, input: SetLog[]): string {
+  const sets = workingSets(input);
   if (!sets.length) return '—';
 
   if (exercise.type === 'conditioning' && exercise.measure === 'seconds') {
@@ -81,10 +113,13 @@ export function formatSetSummary(exercise: Exercise, sets: SetLog[]): string {
 
   const count = sets.length;
   const load = topSetLoad(sets);
+  // Bands carry no denomination, so their number stays bare.
+  const suffix =
+    exercise.unit === 'band' ? '' : ` ${massLabel(exerciseMassUnit(exercise))}`;
   const loadPart =
     exercise.unit === 'bodyweight' || exercise.unit === 'none' || load === 0
       ? ''
-      : ` @ ${formatNumber(load)}`;
+      : ` @ ${formatNumber(load)}${suffix}`;
 
   if (exercise.measure === 'laps') {
     const laps = sets.reduce((sum, s) => sum + s.reps, 0);
@@ -100,9 +135,12 @@ export function formatSetSummary(exercise: Exercise, sets: SetLog[]): string {
   return `${count}×${repPart}${unitSuffix}${loadPart}`;
 }
 
-/** "last: 4×8 @ 70" helper for the session screen. */
-export function formatLastSession(exercise: Exercise, sets: SetLog[] | undefined): string {
-  if (!sets || !sets.length) return 'last: —';
+/** "last: 4×8 @ 70 kg" helper for the session screen. Warm-ups don't count. */
+export function formatLastSession(
+  exercise: Exercise,
+  sets: SetLog[] | undefined,
+): string {
+  if (!sets || !workingSets(sets).length) return 'last: —';
   return `last: ${formatSetSummary(exercise, sets)}`;
 }
 

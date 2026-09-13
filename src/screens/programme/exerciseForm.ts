@@ -3,9 +3,17 @@
  * conversion to/from a stored `Exercise`, and validation. No DOM, no Dexie —
  * so this stays trivially testable.
  */
-import type { Exercise, ExerciseType, LoadUnit, Measure, TemplateId } from '../../db/types';
+import type {
+  Exercise,
+  ExerciseType,
+  LoadUnit,
+  MassUnit,
+  Measure,
+  TemplateId,
+} from '../../db/types';
 import type { NewExercise } from '../../db/repo';
-import { formatNumber } from '../../logic/format';
+import { formatMassUnit, formatNumber } from '../../logic/format';
+import { defaultIncrement, exerciseMassUnit, massLabel } from '../../logic/units';
 
 /** Form state. Numbers are nullable so a field can be temporarily empty. */
 export interface ExerciseDraft {
@@ -18,17 +26,33 @@ export interface ExerciseDraft {
   measure: Measure;
   perSide: boolean;
   unit: LoadUnit;
+  /** The denomination the load and the increment are read in. */
+  massUnit: MassUnit;
   increment: number | null;
   type: ExerciseType;
 }
 
+/**
+ * The load unit says *what the number counts*, not what it is measured in —
+ * the denomination is its own choice, so these labels no longer say "kg".
+ */
 export const UNIT_OPTIONS: { value: LoadUnit; label: string }[] = [
-  { value: 'kg_side', label: 'kg per hand' },
-  { value: 'kg_total', label: 'kg total' },
+  { value: 'kg_side', label: 'Per hand' },
+  { value: 'kg_total', label: 'Total' },
   { value: 'band', label: 'Band' },
   { value: 'bodyweight', label: 'Bodyweight' },
   { value: 'none', label: 'None' },
 ];
+
+export const MASS_UNIT_OPTIONS: { value: MassUnit; label: string }[] = [
+  { value: 'kg', label: 'kg' },
+  { value: 'lb', label: 'lb' },
+];
+
+/** Denomination only means something for a unit that carries a weight. */
+export function hasDenomination(unit: LoadUnit): boolean {
+  return unit === 'kg_side' || unit === 'kg_total';
+}
 
 export const MEASURE_OPTIONS: { value: Measure; label: string }[] = [
   { value: 'reps', label: 'Reps' },
@@ -42,20 +66,12 @@ export const TYPE_OPTIONS: { value: ExerciseType; label: string }[] = [
   { value: 'conditioning', label: 'Conditioning' },
 ];
 
-/** Short unit tag for a list row: "kg/hand", "kg", "band", "BW", "—". */
-export function unitLabel(unit: LoadUnit): string {
-  switch (unit) {
-    case 'kg_side':
-      return 'kg/hand';
-    case 'kg_total':
-      return 'kg';
-    case 'band':
-      return 'band';
-    case 'bodyweight':
-      return 'BW';
-    case 'none':
-      return '—';
-  }
+/**
+ * Short unit tag for a list row, in the row's own denomination: "kg/hand",
+ * "lb/hand", "kg", "lb", "band", "BW", "—".
+ */
+export function unitLabel(unit: LoadUnit, massUnit: MassUnit = 'kg'): string {
+  return formatMassUnit({ unit, massUnit });
 }
 
 /** Bands, bodyweight and conditioning have nothing to add plates to. */
@@ -63,14 +79,17 @@ export function incrementDisabled(unit: LoadUnit): boolean {
   return unit === 'band' || unit === 'bodyweight' || unit === 'none';
 }
 
-/** "+5 kg" / "—" for a list row. */
+/** "+5 lb" / "+2.5 kg" / "—" for a list row. */
 export function incrementLabel(exercise: Exercise): string {
   if (incrementDisabled(exercise.unit) || !exercise.increment) return '—';
-  return `+${formatNumber(exercise.increment)} kg`;
+  return `+${formatNumber(exercise.increment)} ${massLabel(exerciseMassUnit(exercise))}`;
 }
 
-/** Defaults for "Add exercise": 3 × 10 reps, kg total, +2.5, accessory. */
-export function blankDraft(): ExerciseDraft {
+/**
+ * Defaults for "Add exercise": 3 × 10 reps, total load, accessory, and the
+ * denomination Settings names for new rows (with its increment).
+ */
+export function blankDraft(massUnit: MassUnit = 'kg'): ExerciseDraft {
   return {
     name: '',
     sets: 3,
@@ -80,7 +99,8 @@ export function blankDraft(): ExerciseDraft {
     measure: 'reps',
     perSide: false,
     unit: 'kg_total',
-    increment: 2.5,
+    massUnit,
+    increment: defaultIncrement('kg_total', massUnit),
     type: 'accessory',
   };
 }
@@ -95,9 +115,26 @@ export function draftFromExercise(exercise: Exercise): ExerciseDraft {
     measure: exercise.measure,
     perSide: exercise.perSide,
     unit: exercise.unit,
+    massUnit: exerciseMassUnit(exercise),
     increment: exercise.increment,
     type: exercise.type,
   };
+}
+
+/**
+ * Switching denomination. The increment is a gym fact, not a conversion —
+ * an lb machine steps in 5 lb, not in 5.51 lb — so an untouched increment is
+ * replaced by the new denomination's default. Once the user has typed their
+ * own step in this sheet it is theirs, and stands.
+ */
+export function changeMassUnit(
+  draft: ExerciseDraft,
+  massUnit: MassUnit,
+  incrementEdited: boolean,
+): Partial<ExerciseDraft> {
+  if (massUnit === draft.massUnit) return {};
+  if (incrementEdited || incrementDisabled(draft.unit)) return { massUnit };
+  return { massUnit, increment: defaultIncrement(draft.unit, massUnit) };
 }
 
 export type DraftErrors = Partial<Record<'name' | 'sets' | 'reps' | 'increment', string>>;
@@ -151,6 +188,7 @@ export function draftToInput(
     measure: draft.measure,
     perSide: draft.perSide,
     unit: draft.unit,
+    massUnit: draft.massUnit,
     increment: incrementDisabled(draft.unit) ? 0 : (draft.increment ?? 0),
     type: draft.type,
     archived: false,

@@ -137,3 +137,24 @@ describe('tallyMuscles', () => {
     expect(row(result, 'triceps')).toMatchObject({ sets: 0, weightedSets: 0.5 });
   });
 });
+
+describe('tallyMuscles — warm-ups', () => {
+  const squat = entry({ id: 'cat_squat', primary: ['quads'], secondary: ['glutes'] });
+  const resolve = (exerciseId: string): CatalogEntry | undefined =>
+    exerciseId === 'ex_squat' ? squat : undefined;
+
+  it('does not count warm-up sets, linked or not', () => {
+    const result = tallyMuscles(
+      [
+        { sessionId: 's1', exerciseId: 'ex_squat' },
+        { sessionId: 's1', exerciseId: 'ex_squat', kind: 'warmup' },
+        { sessionId: 's1', exerciseId: 'ex_unknown', kind: 'warmup' },
+      ],
+      resolve,
+    );
+    const quads = result.rows.find((r) => r.muscle === 'quads')!;
+    expect(quads.sets).toBe(1);
+    expect(quads.weightedSets).toBe(1);
+    expect(result.unlinkedSets).toBe(0);
+  });
+});

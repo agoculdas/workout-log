@@ -27,7 +27,13 @@ export function makeSets(
   sessionId: string,
   load: number,
   reps: number[],
-  opts: { exerciseId?: string; completedAt?: number } = {},
+  opts: {
+    exerciseId?: string;
+    completedAt?: number;
+    kind?: SetLog['kind'];
+    toFailure?: boolean;
+    massUnit?: SetLog['massUnit'];
+  } = {},
 ): SetLog[] {
   const base = opts.completedAt ?? 1_700_000_000_000;
   return reps.map((r, i) => ({
@@ -38,5 +44,18 @@ export function makeSets(
     load,
     reps: r,
     completedAt: base + i * 60_000,
+    ...(opts.kind ? { kind: opts.kind } : {}),
+    ...(opts.toFailure === undefined ? {} : { toFailure: opts.toFailure }),
+    ...(opts.massUnit ? { massUnit: opts.massUnit } : {}),
   }));
+}
+
+/** One warm-up row, to prove the maths ignores it. */
+export function makeWarmup(
+  sessionId: string,
+  load: number,
+  reps: number,
+  opts: { exerciseId?: string; completedAt?: number; massUnit?: SetLog['massUnit'] } = {},
+): SetLog {
+  return makeSets(sessionId, load, [reps], { ...opts, kind: 'warmup' })[0]!;
 }

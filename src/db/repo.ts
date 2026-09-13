@@ -8,6 +8,10 @@
 import { db, newId, type WorkoutDB } from './db';
 import { DEFAULT_SETTINGS, SEED_CATALOG, SEED_EXERCISES, SEED_TEMPLATES } from './seed';
 import { tallyMuscles } from '../logic/muscleVolume';
+import { formatSetSummary } from '../logic/format';
+import { warmupSets, workingSets } from '../logic/sets';
+import { defaultIncrement, exerciseMassUnit } from '../logic/units';
+import { topSetLoad, totalVolumeKg } from '../logic/volume';
 import { EQUIPMENT, MUSCLES, PATTERNS } from './types';
 import type {
   BodyweightEntry,
@@ -17,7 +21,7 @@ import type {
   ExerciseSnapshot,
   ExportBundle,
   ImportCounts,
-  LoadUnit,
+  MassUnit,
   Measure,
   Muscle,
   MuscleVolumeResult,
@@ -39,13 +43,23 @@ export type { MuscleVolumeResult, MuscleVolumeRow, PatternBalance } from './type
  * adding a setting never needs a schema bump or a migration.
  */
 function withDefaults(row: Settings): Settings {
-  return { ...DEFAULT_SETTINGS, ...row, id: 'settings' };
+  const merged = { ...DEFAULT_SETTINGS, ...row, id: 'settings' as const };
+  return {
+    ...merged,
+    // Copy the containers so no caller can mutate DEFAULT_SETTINGS through a
+    // row that fell back to it.
+    plates: Array.isArray(row.plates) ? [...row.plates] : [...DEFAULT_SETTINGS.plates],
+    setsPerMuscleTarget: {
+      ...DEFAULT_SETTINGS.setsPerMuscleTarget,
+      ...(row.setsPerMuscleTarget ?? {}),
+    },
+  };
 }
 
 export async function getSettings(): Promise<Settings> {
   const found = await db.settings.get('settings');
   if (found) return withDefaults(found);
-  const fresh = { ...DEFAULT_SETTINGS };
+  const fresh = withDefaults(DEFAULT_SETTINGS);
   await db.settings.put(fresh);
   return fresh;
 }
@@ -66,6 +80,21 @@ export async function updateSettings(
   const next: Settings = { ...current, ...patch, id: 'settings' };
   await db.settings.put(next);
   return next;
+}
+
+/**
+ * Stamp "backed up just now". Called by the UI *after* a download or copy
+ * actually succeeded — `exportAll()` deliberately does not, because producing
+ * the text is not the same as the user keeping it.
+ */
+export async function markExported(): Promise<void> {
+  await updateSettings({ lastExportAt: Date.now() });
+}
+
+/** The default denomination for new exercises, without a write-on-miss. */
+async function defaultMassUnit(): Promise<MassUnit> {
+  const settings = await readSettings();
+  return settings?.units === 'lb' ? 'lb' : 'kg';
 }
 
 /* ----------------------------------------------------------------- templates */
@@ -120,7 +149,9 @@ export type NewExercise = Omit<Exercise, 'id' | 'order'> &
 
 /**
  * Create or update an exercise. Omit `id` to create one (a UUID is assigned);
- * omit `order` on create and it is appended to the end of its template.
+ * omit `order` on create and it is appended to the end of its template. A new
+ * row with no `massUnit` takes the one from Settings; an existing row keeps
+ * the denomination it already had unless the patch names another.
  * Returns the stored row.
  */
 export async function upsertExercise(input: NewExercise): Promise<Exercise> {
@@ -134,12 +165,14 @@ export async function upsertExercise(input: NewExercise): Promise<Exercise> {
       .toArray();
     order = siblings.reduce((max, e) => Math.max(max, e.order + 1), 0);
   }
+  const massUnit = input.massUnit ?? existing?.massUnit ?? (await defaultMassUnit());
   const row: Exercise = {
     archived: false,
     ...existing,
     ...input,
     id,
     order,
+    massUnit,
   };
   await db.exercises.put(row);
   return row;
@@ -299,11 +332,6 @@ export async function listExercisesForCatalog(
   );
 }
 
-/** Progression step implied by a unit: 2.5 kg for anything loaded in kg. */
-export function defaultIncrementFor(unit: LoadUnit): number {
-  return unit === 'kg_side' || unit === 'kg_total' ? 2.5 : 0;
-}
-
 /** Starting target for a measure: 10 reps, 45 seconds or 1 lap, all fixed. */
 export function defaultTargetFor(measure: Measure): { repMin: number; repMax: number } {
   switch (measure) {
@@ -319,7 +347,16 @@ export function defaultTargetFor(measure: Measure): { repMin: number; repMax: nu
 export type CatalogExerciseOverrides = Partial<
   Pick<
     Exercise,
-    'sets' | 'repMin' | 'repMax' | 'increment' | 'type' | 'perSide' | 'unit' | 'measure' | 'name'
+    | 'sets'
+    | 'repMin'
+    | 'repMax'
+    | 'increment'
+    | 'type'
+    | 'perSide'
+    | 'unit'
+    | 'massUnit'
+    | 'measure'
+    | 'name'
   >
 >;
 
@@ -327,8 +364,9 @@ export type CatalogExerciseOverrides = Partial<
  * Append a catalogue movement to a day as a programme exercise.
  *
  * Defaults: the entry's name, `defaultUnit`, `defaultMeasure` and `unilateral`
- * (as `perSide`); 3 sets; a fixed target from `defaultTargetFor`; an increment
- * from `defaultIncrementFor`; type `accessory`, or `conditioning` when the
+ * (as `perSide`); the denomination from Settings; 3 sets; a fixed target from
+ * `defaultTargetFor`; an increment from `defaultIncrement` (so an lb exercise
+ * starts at 5 lb, a kg one at 2.5 kg); type `accessory`, or `conditioning` when the
  * entry's pattern is. `overrides` win, and are applied before the derived
  * defaults are computed — override the unit and you get that unit's increment,
  * override the measure and you get that measure's target. Passing `repMin`
@@ -345,6 +383,7 @@ export async function addExerciseFromCatalog(
   if (!entry) throw new Error(`Unknown catalogue entry: ${catalogId}`);
 
   const unit = overrides.unit ?? entry.defaultUnit;
+  const massUnit = overrides.massUnit ?? (await defaultMassUnit());
   const measure = overrides.measure ?? entry.defaultMeasure;
   const target = defaultTargetFor(measure);
   const repMin = overrides.repMin ?? target.repMin;
@@ -360,7 +399,8 @@ export async function addExerciseFromCatalog(
     measure,
     perSide: overrides.perSide ?? entry.unilateral,
     unit,
-    increment: overrides.increment ?? defaultIncrementFor(unit),
+    massUnit,
+    increment: overrides.increment ?? defaultIncrement(unit, massUnit),
     type:
       overrides.type ?? (entry.pattern === 'conditioning' ? 'conditioning' : 'accessory'),
     archived: false,
@@ -384,7 +424,8 @@ async function loadWindow(opts: { from: number; to: number }): Promise<{
   const finished = new Set(
     sessions.filter((s) => s.finishedAt !== undefined).map((s) => s.id),
   );
-  const sets = setLogs.filter(
+  // Warm-ups train nothing as far as the reports are concerned.
+  const sets = workingSets(setLogs).filter(
     (s) =>
       finished.has(s.sessionId) && s.completedAt >= opts.from && s.completedAt <= opts.to,
   );
@@ -467,6 +508,7 @@ export function exerciseSnapshot(exercise: Exercise): ExerciseSnapshot {
     measure: exercise.measure,
     perSide: exercise.perSide,
     unit: exercise.unit,
+    massUnit: exerciseMassUnit(exercise),
     type: exercise.type,
     ...(exercise.catalogId ? { catalogId: exercise.catalogId } : {}),
   };
@@ -607,6 +649,97 @@ export async function getSessionDetail(id: string): Promise<SessionDetail | unde
   return { session, template, exercises, setsByExercise, sets };
 }
 
+/** One exercise's line in the finish summary. */
+export interface SessionSummaryExercise {
+  exerciseId: string;
+  name: string;
+  /** `formatSetSummary` over the working sets, e.g. "4×10 @ 70 kg". */
+  summary: string;
+  /** How many of this exercise's sets the user marked "to failure". */
+  toFailure: number;
+  /** Top working set beat the previous completed session's. False with no history. */
+  progressed: boolean;
+  /** Top working-set load in the previous completed session, when there was one. */
+  previousTop?: number;
+  /** Top working-set load this session, when anything working was logged. */
+  top?: number;
+  /** The denomination `top` / `previousTop` are in. */
+  massUnit: MassUnit;
+}
+
+/** What the Finish sheet shows. Loads stay in each exercise's own denomination. */
+export interface SessionSummary {
+  session: Session;
+  templateName: string;
+  /** `(finishedAt ?? now) - startedAt`. */
+  durationMs: number;
+  /** Working sets logged across the session. */
+  setsLogged: number;
+  /** Warm-up sets, counted separately and nowhere else. */
+  warmups: number;
+  /** Working-set volume in kilograms, converted per set — honest across units. */
+  volumeKg: number;
+  /** One row per exercise that has at least one logged set, in session order. */
+  exercises: SessionSummaryExercise[];
+}
+
+/**
+ * The post-Finish summary: how long it took, what was logged, and where you
+ * moved up. "Progressed" compares the top working set against the previous
+ * *completed* session of that exercise, in the exercise's own denomination —
+ * no history means no claim.
+ */
+export async function getSessionSummary(
+  sessionId: string,
+): Promise<SessionSummary | undefined> {
+  const detail = await getSessionDetail(sessionId);
+  if (!detail) return undefined;
+  const { session, template, exercises, setsByExercise, sets } = detail;
+
+  const rows: SessionSummaryExercise[] = [];
+  for (const exercise of exercises) {
+    const logged = setsByExercise[exercise.id] ?? [];
+    if (!logged.length) continue;
+
+    const history = await getExerciseHistory(exercise.id);
+    const previous = history
+      .filter(
+        (h) =>
+          h.session.id !== session.id &&
+          h.session.finishedAt !== undefined &&
+          h.session.startedAt < session.startedAt,
+      )
+      .sort((a, b) => a.session.startedAt - b.session.startedAt)
+      .pop();
+
+    const working = workingSets(logged);
+    const previousWorking = previous ? workingSets(previous.sets) : [];
+    const top = working.length ? topSetLoad(working) : undefined;
+    const previousTop = previousWorking.length ? topSetLoad(previousWorking) : undefined;
+
+    rows.push({
+      exerciseId: exercise.id,
+      name: exercise.name,
+      summary: formatSetSummary(exercise, logged),
+      toFailure: logged.filter((s) => s.toFailure).length,
+      progressed: top !== undefined && previousTop !== undefined && top > previousTop,
+      ...(previousTop === undefined ? {} : { previousTop }),
+      ...(top === undefined ? {} : { top }),
+      massUnit: exerciseMassUnit(exercise),
+    });
+  }
+
+  return {
+    session,
+    templateName: template?.name ?? session.templateId,
+    durationMs: Math.max(0, (session.finishedAt ?? Date.now()) - session.startedAt),
+    setsLogged: workingSets(sets).length,
+    warmups: warmupSets(sets).length,
+    volumeKg: totalVolumeKg(sets),
+    exercises: rows,
+  };
+}
+
 /* ---------------------------------------------------------------------- sets */
 
 export interface LogSetInput {
@@ -616,13 +749,25 @@ export interface LogSetInput {
   load: number;
   reps: number;
   completedAt?: number;
+  /** `'warmup'` for a warm-up row; omit for a working set. */
+  kind?: SetLog['kind'];
+  /** A fact the user marked. Never read by progression. */
+  toFailure?: boolean;
+  /** Omit and the exercise's own denomination is stamped on. */
+  massUnit?: MassUnit;
 }
 
 /**
  * Record one completed set. Upserts on (sessionId, exerciseId, setIndex), so
  * re-tapping "done" on the same set corrects it instead of duplicating it.
+ * The denomination is stamped from the exercise at log time, so editing the
+ * exercise later never re-reads old numbers. The row is rebuilt from `input`
+ * on every call, so pass `kind` and `toFailure` again when correcting a set
+ * (or patch the row with `updateSet`).
  */
 export async function logSet(input: LogSetInput): Promise<SetLog> {
+  const massUnit =
+    input.massUnit ?? exerciseMassUnit(await db.exercises.get(input.exerciseId));
   return db.transaction('rw', db.setLogs, async () => {
     const existing = await db.setLogs
       .where('[sessionId+exerciseId]')
@@ -637,12 +782,20 @@ export async function logSet(input: LogSetInput): Promise<SetLog> {
       load: input.load,
       reps: input.reps,
       completedAt: input.completedAt ?? Date.now(),
+      massUnit,
+      ...(input.kind ? { kind: input.kind } : {}),
+      ...(input.toFailure === undefined ? {} : { toFailure: input.toFailure }),
     };
     await db.setLogs.put(row);
     return row;
   });
 }
 
+/**
+ * Patch one logged set in place. `kind` (warm-up / working), `toFailure`,
+ * `load`, `reps`, `massUnit` and `completedAt` are all fair game; the session
+ * and exercise it belongs to are not.
+ */
 export async function updateSet(
   id: string,
   patch: Partial<Omit<SetLog, 'id' | 'sessionId' | 'exerciseId'>>,

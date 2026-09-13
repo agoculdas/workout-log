@@ -4,12 +4,15 @@
  * `db/repo.ts` is a thin wrapper that feeds these the rows it read.
  */
 import { MUSCLES } from '../db/types';
-import type { CatalogEntry, Muscle, MuscleVolumeResult, MuscleVolumeRow } from '../db/types';
+import type { CatalogEntry, Muscle, MuscleVolumeResult, MuscleVolumeRow, SetLog } from '../db/types';
+import { workingSets } from './sets';
 
 /** A set as far as the tally is concerned. */
 export interface TallySet {
   sessionId: string;
   exerciseId: string;
+  /** Warm-ups (`'warmup'`) are not counted. Absent means a working set. */
+  kind?: SetLog['kind'];
 }
 
 /** A set as far as bucketing is concerned. */
@@ -84,7 +87,8 @@ export function bucketByWeek<T extends TimedSet>(
  * Share the sets out over the muscles their catalogue entry names: a set
  * counts 1 for each primary muscle and 0.5 for each secondary one. `sets`
  * counts primaries only; `weightedSets` counts both. Sets whose exercise has
- * no catalogue entry are counted in `unlinkedSets` and nowhere else.
+ * no catalogue entry are counted in `unlinkedSets` and nowhere else. Warm-ups
+ * are dropped before anything is counted, `unlinkedSets` included.
  *
  * Every muscle gets a row, including the ones with nothing in them, in
  * `MUSCLES` order — so a chart can render the whole body without filling gaps.
@@ -103,7 +107,7 @@ export function tallyMuscles<T extends TallySet>(
   }
 
   let unlinkedSets = 0;
-  for (const log of setLogs) {
+  for (const log of workingSets(setLogs)) {
     const entry = resolveEntry(log.exerciseId);
     if (!entry) {
       unlinkedSets++;

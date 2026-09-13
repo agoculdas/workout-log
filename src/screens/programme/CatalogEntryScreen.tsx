@@ -12,6 +12,7 @@ import {
 import type { TemplateId } from '../../db/types';
 import { EQUIPMENT_LABELS, PATTERN_LABELS, SPLIT_TAG_LABELS } from '../../db/labels';
 import { formatPrescription } from '../../logic/format';
+import { exerciseMassUnit } from '../../logic/units';
 import { MEASURE_OPTIONS, UNIT_OPTIONS, unitLabel } from './exerciseForm';
 import CatalogEntrySheet from './CatalogEntrySheet';
 import { muscleList, sortMuscles, templateNames } from './libraryUtils';
@@ -173,7 +174,8 @@ export function CatalogEntryScreen() {
                       {names.get(row.templateId) ?? row.templateId}
                     </span>
                     <span className="block truncate text-xs text-muted">
-                      {row.name} · {formatPrescription(row)} · {unitLabel(row.unit)}
+                      {row.name} · {formatPrescription(row)} ·{' '}
+                      {unitLabel(row.unit, exerciseMassUnit(row))}
                     </span>
                   </span>
                 </li>

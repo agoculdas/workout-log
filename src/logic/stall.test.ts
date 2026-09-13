@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isStalled, regressionStreak } from './stall';
-import { makeSets } from './testFixtures';
+import { makeSets, makeWarmup } from './testFixtures';
 
 describe('isStalled', () => {
   it('is false with fewer than three sessions', () => {
@@ -88,5 +88,30 @@ describe('regressionStreak', () => {
         makeSets('b', 70, [10, 10, 10, 10]),
       ]),
     ).toBe(0);
+  });
+});
+
+describe('warm-ups', () => {
+  it('are ignored by isStalled and regressionStreak', () => {
+    // A heavy warm-up row in the newest session would otherwise hide the
+    // regression (it lifts the top load) — it must not count.
+    const history = [
+      [...makeSets('a', 70, [10, 10, 10, 10])],
+      [...makeSets('b', 70, [10, 9, 9, 9])],
+      [makeWarmup('c', 200, 20), ...makeSets('c', 70, [9, 8, 8, 8])],
+    ];
+    expect(isStalled(history)).toBe(true);
+    expect(regressionStreak(history)).toBe(2);
+  });
+
+  it('do not make an otherwise empty session count', () => {
+    const history = [
+      makeSets('a', 70, [10, 10, 10, 10]),
+      [makeWarmup('b', 40, 10)],
+      makeSets('c', 70, [9, 9, 9, 9]),
+    ];
+    // Session b holds warm-ups only, so there are two real sessions, not three.
+    expect(isStalled(history)).toBe(false);
+    expect(regressionStreak(history)).toBe(1);
   });
 });

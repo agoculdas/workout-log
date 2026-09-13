@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, Card, ConfirmDialog, NumberField, PageHeader } from '../components';
-import { exportAll, importMerge, updateSettings, wipeAll } from '../db/repo';
+import { exportAll, importMerge, markExported, updateSettings, wipeAll } from '../db/repo';
+import { formatDate, formatNumber } from '../logic/format';
 import useSettings from '../hooks/useSettings';
+import type { MassUnit } from '../db/types';
 import {
   backupFilename,
   bundleToText,
@@ -96,30 +98,46 @@ const NOTIFY_LABEL: Record<NotifyState, string> = {
   default: 'Not asked yet',
 };
 
+/** Seconds and set counts are whole numbers; bar weight and plates are not. */
+const WHOLE = (n: number) => Math.max(0, Math.round(n));
+
 /**
- * Rest-timer field. Typing is debounced so "135" is stored once rather than as
- * 1 → 13 → 135; the -/+ steppers and blur commit straight away. Re-syncs when
- * the stored value changes underneath it (first load, import, wipe).
+ * A settings number field. Typing is debounced so "135" is stored once rather
+ * than as 1 → 13 → 135; the -/+ steppers and blur commit straight away.
+ * Re-syncs when the stored value changes underneath it (first load, import,
+ * wipe). `clean` is applied to whatever is committed, never to what is typed.
  */
-function RestField({
+function DebouncedField({
   label,
-  seconds,
+  value: stored,
   onCommit,
   hint,
+  step,
+  min = 0,
+  max,
+  suffix,
+  clean = (n: number) => Math.max(0, n),
+  className,
 }: {
   label: string;
-  seconds: number;
+  value: number;
   onCommit: (value: number) => void;
-  hint: string;
+  hint?: string;
+  step: number;
+  min?: number;
+  max?: number;
+  suffix?: string;
+  clean?: (value: number) => number;
+  className?: string;
 }) {
-  const [draft, setDraft] = useState<number | null>(seconds);
-  const [synced, setSynced] = useState(seconds);
+  const [draft, setDraft] = useState<number | null>(stored);
+  const [synced, setSynced] = useState(stored);
   const pending = useRef<number | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  if (seconds !== synced) {
-    setSynced(seconds);
-    if (pending.current === null) setDraft(seconds);
+  if (stored !== synced) {
+    setSynced(stored);
+    if (pending.current === null) setDraft(stored);
   }
 
   const cancel = () => {
@@ -149,23 +167,24 @@ function RestField({
           pending.current = null;
           return;
         }
-        const clean = Math.max(0, Math.round(value));
+        const next = clean(value);
         if (source === 'step') {
           cancel();
           pending.current = null;
-          onCommit(clean);
+          onCommit(next);
           return;
         }
-        pending.current = clean;
+        pending.current = next;
         cancel();
         timer.current = setTimeout(flush, REST_COMMIT_DEBOUNCE_MS);
       }}
       onBlur={flush}
-      step={15}
-      min={0}
-      max={600}
-      suffix="s"
-      hint={hint}
+      step={step}
+      min={min}
+      {...(max === undefined ? {} : { max })}
+      {...(suffix === undefined ? {} : { suffix })}
+      {...(hint === undefined ? {} : { hint })}
+      {...(className === undefined ? {} : { className })}
     />
   );
 }
@@ -185,6 +204,7 @@ export function Settings() {
   const [storage, setStorage] = useState<{ usage: number; quota: number } | null>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [notify, setNotify] = useState<NotifyState>(readNotifyState);
+  const [newPlate, setNewPlate] = useState<number | null>(null);
 
   /**
    * Settings writes are read-modify-write, so two taps in quick succession can
@@ -193,6 +213,27 @@ export function Settings() {
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const commit = (patch: Parameters<typeof updateSettings>[0]) => {
     queue.current = queue.current.then(() => updateSettings(patch)).catch(() => undefined);
+  };
+
+  /** Heaviest first, deduplicated — the calculator works down the list. */
+  const addPlate = () => {
+    if (newPlate === null || !(newPlate > 0)) return;
+    setNewPlate(null);
+    if (settings.plates.some((p) => Math.abs(p - newPlate) < 1e-9)) return;
+    commit({ plates: [...settings.plates, newPlate].sort((a, b) => b - a) });
+  };
+
+  const removePlate = (plate: number) => {
+    commit({ plates: settings.plates.filter((p) => p !== plate) });
+  };
+
+  /** The band never crosses itself: raising the floor pushes the ceiling up. */
+  const commitTargetMin = (min: number) => {
+    commit({ setsPerMuscleTarget: { min, max: Math.max(min, settings.setsPerMuscleTarget.max) } });
+  };
+
+  const commitTargetMax = (max: number) => {
+    commit({ setsPerMuscleTarget: { min: Math.min(max, settings.setsPerMuscleTarget.min), max } });
   };
 
   useEffect(() => {
@@ -233,6 +274,7 @@ export function Settings() {
       const text = bundleToText(await exportAll());
       const name = backupFilename();
       if (downloadText(text, name)) {
+        await markExported();
         setStatus({ kind: 'ok', text: `Saved ${name}. Check your downloads.` });
       } else {
         setStatus({
@@ -251,8 +293,10 @@ export function Settings() {
     setBusy(true);
     try {
       const text = bundleToText(await exportAll());
+      const copied = await copyText(text);
+      if (copied) await markExported();
       setStatus(
-        (await copyText(text))
+        copied
           ? { kind: 'ok', text: 'Backup copied — paste it somewhere safe.' }
           : {
               kind: 'error',
@@ -323,24 +367,26 @@ export function Settings() {
         </div>
       ) : null}
 
-      <Section title="Units" note="Everything is stored in kilograms for now.">
+      <Section title="Units" note="Volume totals are always converted to kilograms.">
         <div>
           <label
             htmlFor="units"
             className="mb-1 block text-xs font-medium tracking-wide text-muted uppercase"
           >
-            Weight unit
+            Default unit for new exercises
           </label>
           <select
             id="units"
             value={settings.units}
-            disabled
-            onChange={(e) => commit({ units: e.target.value as 'kg' })}
+            onChange={(e) => commit({ units: e.target.value as MassUnit })}
             className="h-14 w-full appearance-none rounded-xl border border-border bg-surface px-3 text-base text-fg disabled:opacity-40"
           >
             <option value="kg">Kilograms (kg)</option>
+            <option value="lb">Pounds (lb)</option>
           </select>
-          <p className="mt-1 text-xs text-muted">More soon.</p>
+          <p className="mt-1 text-xs text-muted">
+            Each exercise can be set to kg or lb in Programme.
+          </p>
         </div>
       </Section>
 
@@ -348,17 +394,106 @@ export function Settings() {
         title="Rest timer"
         note="Defaults for the countdown that starts when you tick a set off."
       >
-        <RestField
+        <DebouncedField
           label="Primary lifts"
-          seconds={settings.restPrimary}
+          value={settings.restPrimary}
           onCommit={(restPrimary) => commit({ restPrimary })}
-          hint="Default 120 s."
+          step={15}
+          max={600}
+          suffix="s"
+          clean={WHOLE}
+          hint="Default 120 s. Warm-ups rest for half as long."
         />
-        <RestField
+        <DebouncedField
           label="Accessories"
-          seconds={settings.restAccessory}
+          value={settings.restAccessory}
           onCommit={(restAccessory) => commit({ restAccessory })}
+          step={15}
+          max={600}
+          suffix="s"
+          clean={WHOLE}
           hint="Default 90 s."
+        />
+      </Section>
+
+      <Section title="Plates" note="Used by the plate calculator on barbell exercises.">
+        <DebouncedField
+          label="Bar weight"
+          value={settings.barWeight}
+          onCommit={(barWeight) => commit({ barWeight })}
+          step={2.5}
+          max={100}
+          suffix="kg"
+        />
+
+        <div className="border-t border-border/70 pt-4">
+          <p className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">
+            Plates per side
+          </p>
+          {settings.plates.length ? (
+            <div className="flex flex-wrap gap-2">
+              {settings.plates.map((plate) => (
+                <button
+                  key={plate}
+                  type="button"
+                  onClick={() => removePlate(plate)}
+                  aria-label={`Remove ${formatNumber(plate)} kg plate`}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-full border border-border bg-surface px-3 text-muted active:bg-surface-2"
+                >
+                  <span className="text-sm leading-none tabular-nums">{formatNumber(plate)}</span>
+                  <span aria-hidden="true" className="text-sm leading-none">
+                    ×
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted">No plates — the calculator has nothing to load.</p>
+          )}
+
+          <div className="mt-3 flex items-end gap-2">
+            <div className="min-w-0 flex-1">
+              <NumberField
+                label="Add plate"
+                value={newPlate}
+                onChange={(value) => setNewPlate(value)}
+                step={1.25}
+                min={0}
+                max={100}
+                suffix="kg"
+              />
+            </div>
+            <Button
+              variant="secondary"
+              className="shrink-0"
+              disabled={newPlate === null || newPlate <= 0}
+              onClick={addPlate}
+            >
+              Add
+            </Button>
+          </div>
+        </div>
+      </Section>
+
+      <Section
+        title="Muscles report"
+        note="Reference band on the Muscles chart. Roughly 10–20 hard sets per muscle per week is the usual range."
+      >
+        <DebouncedField
+          label="Min sets per muscle"
+          value={settings.setsPerMuscleTarget.min}
+          onCommit={commitTargetMin}
+          step={1}
+          max={60}
+          clean={WHOLE}
+        />
+        <DebouncedField
+          label="Max sets per muscle"
+          value={settings.setsPerMuscleTarget.max}
+          onCommit={commitTargetMax}
+          step={1}
+          max={60}
+          clean={WHOLE}
         />
       </Section>
 
@@ -403,6 +538,8 @@ export function Settings() {
             Copy to clipboard
           </Button>
           <p className="text-xs text-muted">
+            Last backup:{' '}
+            {settings.lastExportAt === undefined ? 'never' : formatDate(settings.lastExportAt)}.
             Some installed PWAs block file downloads — the clipboard copy is the fallback.
           </p>
         </div>

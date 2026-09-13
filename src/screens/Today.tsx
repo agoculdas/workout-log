@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Button, Card, ConfirmDialog, PageHeader, Sheet } from '../components';
 import {
@@ -11,6 +11,7 @@ import {
   listExercises,
   listSessions,
   listTemplates,
+  readSettings,
   startSession,
 } from '../db/repo';
 import { calendarDaysAgo, pickNextSession, type NextSessionPick } from '../logic/nextSession';
@@ -39,12 +40,27 @@ interface TodayData {
   last: LastInfo | undefined;
   /** Days since the most recent completed *lower* day, if there is one. */
   lowerDaysAgo: number | undefined;
+  /** Days since the last export. `undefined` means it has never happened. */
+  backupDays: number | undefined;
 }
 
 function daysAgoLabel(days: number): string {
   if (days <= 0) return 'today';
   if (days === 1) return 'yesterday';
   return `${days} days ago`;
+}
+
+/** A backup older than this is worth one quiet line. Nothing sooner. */
+const BACKUP_STALE_DAYS = 14;
+
+/** "3 weeks ago" / "5 months ago" — only ever called past the 14-day mark. */
+function backupAgeLabel(days: number): string {
+  if (days < BACKUP_STALE_DAYS) return `${days} days ago`;
+  const months = Math.floor(days / 30);
+  if (months >= 12) return 'over a year ago';
+  if (months >= 2) return `${months} months ago`;
+  const weeks = Math.floor(days / 7);
+  return `${weeks} weeks ago`;
 }
 
 /** Time of day, for the header subtitle. */
@@ -67,11 +83,12 @@ export function Today() {
 
   const data = useLiveQuery(async (): Promise<TodayData> => {
     const now = Date.now();
-    const [templates, lastCompleted, active, completed] = await Promise.all([
+    const [templates, lastCompleted, active, completed, settings] = await Promise.all([
       listTemplates(),
       getLastCompletedSession(),
       getActiveSession(),
       listSessions(false),
+      readSettings(),
     ]);
 
     const pick = pickNextSession(templates, lastCompleted, now);
@@ -115,6 +132,10 @@ export function Today() {
       lowerDaysAgo: lowerSession
         ? calendarDaysAgo(lowerSession.finishedAt ?? lowerSession.startedAt, now)
         : undefined,
+      backupDays:
+        settings?.lastExportAt === undefined
+          ? undefined
+          : calendarDaysAgo(settings.lastExportAt, now),
     };
   }, []);
 
@@ -151,6 +172,13 @@ export function Today() {
   const name = template?.name ?? 'Next session';
   /** A lower day trained today or yesterday is the thing we warn about. */
   const lowerRecent = data.lowerDaysAgo !== undefined && data.lowerDaysAgo <= 1;
+
+  /**
+   * The data lives in this browser and nowhere else. One muted line when the
+   * last export is old (or never happened), and nothing at all when it is not.
+   */
+  const backupDays = data.backupDays;
+  const backupStale = backupDays === undefined || backupDays >= BACKUP_STALE_DAYS;
 
   return (
     <div>
@@ -234,6 +262,18 @@ export function Today() {
           </p>
         </div>
       </div>
+
+      {backupStale ? (
+        <p className="px-4 pt-6 text-center text-xs text-muted">
+          {backupDays === undefined
+            ? 'No backup yet'
+            : `Last backup ${backupAgeLabel(backupDays)}`}{' '}
+          ·{' '}
+          <Link to="/settings" className="underline underline-offset-4">
+            Export
+          </Link>
+        </p>
+      ) : null}
 
       <Sheet open={sheetOpen} onClose={() => setSheetOpen(false)} title="Start a session">
         <ul className="flex flex-col gap-1">

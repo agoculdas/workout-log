@@ -12,12 +12,12 @@ import {
   updateSession,
 } from '../db/repo';
 import type { Exercise, Session, SetLog } from '../db/types';
-import { formatDate, formatSetSummary } from '../logic/format';
-import { totalVolume } from '../logic/volume';
+import { formatDate, formatSetSummary, formatVolumeKg } from '../logic/format';
+import { totalVolumeKg } from '../logic/volume';
 import { BodyweightSection } from './history/Bodyweight';
 import EditSetSheet from './history/EditSetSheet';
 import { MusclesSection } from './history/Muscles';
-import { formatSetLine } from './history/setLine';
+import { formatSetLine, orderedSetLines, setLineLabel } from './history/setLine';
 
 type Segment = 'sessions' | 'bodyweight' | 'muscles';
 
@@ -75,7 +75,8 @@ interface SessionRow {
   session: Session;
   templateName: string;
   setCount: number;
-  volume: number;
+  /** Working-set volume in kilograms — lb sets converted, so the total adds up. */
+  volumeKg: number;
 }
 
 function SessionsSection() {
@@ -98,7 +99,7 @@ function SessionsSection() {
         session,
         templateName: nameById.get(session.templateId) ?? session.templateId,
         setCount: own.length,
-        volume: totalVolume(own),
+        volumeKg: totalVolumeKg(own),
       };
     });
   }, []);
@@ -146,7 +147,7 @@ function SessionsSection() {
                       <div className="mt-0.5 text-xs text-muted">
                         {formatDate(row.session.finishedAt ?? row.session.startedAt)} ·{' '}
                         {formatSessionLength(row.session)} · {row.setCount} set
-                        {row.setCount === 1 ? '' : 's'} · {formatVolume(row.volume)}
+                        {row.setCount === 1 ? '' : 's'} · {formatVolume(row.volumeKg)}
                       </div>
                     </div>
                     <Chevron open={expanded === row.session.id} />
@@ -171,7 +172,8 @@ function SessionsSection() {
 interface EditTarget {
   exercise: Exercise;
   set: SetLog;
-  setNumber: number;
+  /** "set 3" / "warm-up 1" — what the edit sheet calls this row. */
+  label: string;
 }
 
 function SessionDetail({
@@ -219,15 +221,31 @@ function SessionDetail({
                 {open ? (
                   <div className="pb-2">
                     <ul>
-                      {sets.map((set, i) => (
-                        <li key={set.id} className="flex items-center gap-3 text-sm">
-                          <span className="w-14 shrink-0 text-muted">Set {i + 1}</span>
+                      {orderedSetLines(sets).map((line) => (
+                        <li
+                          key={line.set.id}
+                          className={[
+                            'flex items-center gap-3 text-sm',
+                            line.warmup ? 'text-muted/70' : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
+                        >
+                          <span className="w-14 shrink-0 text-muted">
+                            {line.warmup ? 'W' : `Set ${line.index}`}
+                          </span>
                           <span className="min-w-0 flex-1 truncate tabular-nums">
-                            {formatSetLine(exercise, set)}
+                            {formatSetLine(exercise, line.set)}
                           </span>
                           <button
                             type="button"
-                            onClick={() => setEditing({ exercise, set, setNumber: i + 1 })}
+                            onClick={() =>
+                              setEditing({
+                                exercise,
+                                set: line.set,
+                                label: setLineLabel(line),
+                              })
+                            }
                             className="min-h-11 shrink-0 rounded-lg px-3 text-sm text-accent active:bg-surface-2"
                           >
                             Edit
@@ -271,7 +289,7 @@ function SessionDetail({
           key={editing.set.id}
           set={editing.set}
           exercise={editing.exercise}
-          setNumber={editing.setNumber}
+          setLabel={editing.label}
           onClose={() => setEditing(null)}
         />
       ) : null}
@@ -441,10 +459,9 @@ function formatSessionLength(session: Session): string {
   return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')}`;
 }
 
-/** Volume is a big number — thousands separators, no decimals. */
-function formatVolume(volume: number): string {
-  if (volume <= 0) return '—';
-  return `${Math.round(volume).toLocaleString()} kg`;
+/** Volume is a big number — thousands separators, no decimals. Always kg. */
+function formatVolume(kg: number): string {
+  return kg <= 0 ? '—' : formatVolumeKg(kg);
 }
 
 interface MonthGroup {

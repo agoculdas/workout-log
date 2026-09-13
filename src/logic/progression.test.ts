@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { suggestLoad, targetReps, setsFromLastSession } from './progression';
-import { makeExercise, makeSets } from './testFixtures';
+import { makeExercise, makeSets, makeWarmup } from './testFixtures';
 
 describe('targetReps', () => {
   it('uses the bottom of the range for ranges', () => {
@@ -150,5 +150,40 @@ describe('setsFromLastSession', () => {
     const result = setsFromLastSession([...recent.slice().reverse(), ...old]);
     expect(result.map((s) => s.sessionId)).toEqual(['new', 'new']);
     expect(result.map((s) => s.setIndex)).toEqual([0, 1]);
+  });
+});
+
+describe('warm-ups and set facts', () => {
+  const ex = makeExercise({ sets: 4, repMin: 8, repMax: 10, increment: 5 });
+
+  it('setsFromLastSession drops warm-ups', () => {
+    const sets = [makeWarmup('s2', 40, 10), ...makeSets('s2', 70, [10, 10, 10, 10])];
+    const last = setsFromLastSession(sets);
+    expect(last).toHaveLength(4);
+    expect(last.every((s) => s.kind !== 'warmup')).toBe(true);
+  });
+
+  it('suggestLoad ignores a warm-up row', () => {
+    const clean = makeSets('s2', 70, [10, 10, 10, 10]);
+    const withWarmup = [makeWarmup('s2', 40, 12), ...clean];
+    // Without filtering, the 12-rep light warm-up would break "all sets at top"
+    // and the 4-set count would be wrong.
+    expect(suggestLoad(ex, withWarmup)).toMatchObject({ load: 75, progressed: true });
+    expect(suggestLoad(ex, withWarmup)).toEqual(suggestLoad(ex, clean));
+  });
+
+  it('toFailure changes nothing about the suggestion', () => {
+    const plain = makeSets('s2', 70, [10, 10, 10, 9]);
+    const marked = makeSets('s2', 70, [10, 10, 10, 9], { toFailure: true });
+    expect(suggestLoad(ex, marked)).toEqual(suggestLoad(ex, plain));
+    expect(suggestLoad(ex, marked).progressed).toBe(false);
+  });
+
+  it('names the exercise denomination in the reason', () => {
+    const lb = makeExercise({ sets: 4, repMin: 8, repMax: 10, increment: 5, massUnit: 'lb' });
+    const sets = makeSets('s2', 70, [10, 10, 10, 10], { massUnit: 'lb' });
+    expect(suggestLoad(lb, sets).load).toBe(75);
+    expect(suggestLoad(lb, sets).reason).toContain('add 5 lb');
+    expect(suggestLoad(ex, makeSets('s2', 70, [10, 10, 10, 10])).reason).toContain('add 5 kg');
   });
 });

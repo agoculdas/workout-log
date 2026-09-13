@@ -8,16 +8,18 @@ import {
   formatDate,
   formatDuration,
   formatLoad,
+  formatMassUnit,
   formatNumber,
   formatPrescription,
   formatSetSummary,
 } from '../logic/format';
 import { isStalled } from '../logic/stall';
+import { exerciseMassUnit, massLabel } from '../logic/units';
 import { TrendChart } from './history/charts';
 import { CHART_COLORS } from './history/chartTheme';
 import EditSetSheet from './history/EditSetSheet';
 import { describeMuscles } from './history/muscleSeries';
-import { formatSetLine } from './history/setLine';
+import { formatSetLine, orderedSetLines, setLineLabel } from './history/setLine';
 import {
   chartKindFor,
   completedOnly,
@@ -189,7 +191,7 @@ function Charts({
   // Band and bodyweight work logs load 0, so volume would be a flat zero line.
   const volumeChart = volume.some((p) => p.value > 0) ? (
     <TrendChart
-      title="Volume"
+      title={volumeTitle(exercise)}
       data={volume}
       color={CHART_COLORS.accentStrong}
       formatValue={(v) => compact(v)}
@@ -240,7 +242,7 @@ function SessionRow({
   entry: ExerciseSessionHistory;
 }) {
   const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<{ set: SetLog; setNumber: number } | null>(null);
+  const [editing, setEditing] = useState<{ set: SetLog; label: string } | null>(null);
   const when = entry.session.finishedAt ?? entry.session.startedAt;
   // The name this exercise had when the session was logged, if it has changed.
   const snapshotName = entry.session.exercises?.find((e) => e.id === exercise.id)?.name;
@@ -282,15 +284,25 @@ function SessionRow({
               <p className="pb-1 text-xs text-muted">was: {wasCalled}</p>
             ) : null}
             <ul>
-              {entry.sets.map((set, i) => (
-                <li key={set.id} className="flex items-center gap-3 text-sm">
-                  <span className="w-12 shrink-0 text-muted">set {i + 1}</span>
+              {orderedSetLines(entry.sets).map((line) => (
+                <li
+                  key={line.set.id}
+                  className={[
+                    'flex items-center gap-3 text-sm',
+                    line.warmup ? 'text-muted/70' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                >
+                  <span className="w-12 shrink-0 text-muted">
+                    {line.warmup ? 'W' : `set ${line.index}`}
+                  </span>
                   <span className="min-w-0 flex-1 truncate tabular-nums">
-                    {formatSetLine(exercise, set)}
+                    {formatSetLine(exercise, line.set)}
                   </span>
                   <button
                     type="button"
-                    onClick={() => setEditing({ set, setNumber: i + 1 })}
+                    onClick={() => setEditing({ set: line.set, label: setLineLabel(line) })}
                     className="min-h-11 shrink-0 rounded-lg px-3 text-sm text-accent active:bg-surface-2"
                   >
                     Edit
@@ -307,7 +319,7 @@ function SessionRow({
           key={editing.set.id}
           set={editing.set}
           exercise={exercise}
-          setNumber={editing.setNumber}
+          setLabel={editing.label}
           onClose={() => setEditing(null)}
         />
       ) : null}
@@ -317,10 +329,23 @@ function SessionRow({
 
 /* ------------------------------------------------------------------ helpers */
 
+/** " (lb/hand)" — the y axis is in the exercise's own denomination. */
 function unitSuffix(exercise: Exercise): string {
-  if (exercise.unit === 'kg_side') return ' (kg/hand)';
-  if (exercise.unit === 'kg_total') return ' (kg)';
+  if (exercise.unit === 'kg_side' || exercise.unit === 'kg_total') {
+    return ` (${formatMassUnit(exercise)})`;
+  }
   return '';
+}
+
+/**
+ * Volume charts stay in the exercise's own numbers (see `totalVolume`), so the
+ * title has to say when those numbers are pounds. Kilograms are the default and
+ * go unsaid.
+ */
+function volumeTitle(exercise: Exercise): string {
+  return exerciseMassUnit(exercise) === 'lb'
+    ? `Volume (${massLabel('lb')})`
+    : 'Volume';
 }
 
 /** 3200 -> "3,200", 18400 -> "18.4k" — keeps the y axis narrow. */

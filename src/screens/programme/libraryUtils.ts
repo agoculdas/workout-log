@@ -9,6 +9,7 @@ import {
   type CatalogEntry,
   type Equipment,
   type Exercise,
+  type ExerciseType,
   type LoadUnit,
   type Measure,
   type Muscle,
@@ -19,7 +20,7 @@ import {
   type TemplateId,
 } from '../../db/types';
 import { EQUIPMENT_LABELS, MUSCLE_LABELS, PATTERN_LABELS } from '../../db/labels';
-import type { NewCatalogEntry } from '../../db/repo';
+import { defaultTargetFor, type NewCatalogEntry } from '../../db/repo';
 
 const MUSCLE_ORDER = new Map<Muscle, number>(MUSCLES.map((m, i) => [m, i]));
 
@@ -84,6 +85,33 @@ export function appearsInLabel(
     if (!seen.includes(name)) seen.push(name);
   }
   return `in ${seen.join(', ')}`;
+}
+
+/* -------------------------------------------------------------------- swaps */
+
+/** What a swap carries from the outgoing row onto its replacement. */
+export interface SwapOverrides {
+  sets: number;
+  repMin: number;
+  repMax: number;
+  type: ExerciseType;
+}
+
+/**
+ * Swapping keeps how *you* were running the movement — the set count and
+ * whether it is a primary or an accessory. The target only travels when both
+ * movements count the same thing: carrying "8–10" onto a plank would prescribe
+ * ten seconds, so a change of measure takes the incoming entry's own default.
+ */
+export function swapOverrides(
+  outgoing: Pick<Exercise, 'sets' | 'repMin' | 'repMax' | 'measure' | 'type'>,
+  entry: Pick<CatalogEntry, 'defaultMeasure'>,
+): SwapOverrides {
+  const target =
+    entry.defaultMeasure === outgoing.measure
+      ? { repMin: outgoing.repMin, repMax: outgoing.repMax }
+      : defaultTargetFor(entry.defaultMeasure);
+  return { sets: outgoing.sets, ...target, type: outgoing.type };
 }
 
 /* ------------------------------------------------------------- filter chips */

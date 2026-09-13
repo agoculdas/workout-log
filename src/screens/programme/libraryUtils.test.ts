@@ -11,6 +11,7 @@ import {
   muscleList,
   muscleSummary,
   sortMuscles,
+  swapOverrides,
   templateNames,
   toggleFilter,
   toggleMuscle,
@@ -166,5 +167,41 @@ describe('catalogue draft', () => {
 
   it('omits the id when creating', () => {
     expect(draftToCatalogInput({ ...blankCatalogDraft(), name: 'New' }).id).toBeUndefined();
+  });
+});
+
+describe('swapping a movement out', () => {
+  it('carries the target when both movements count the same thing', () => {
+    const outgoing = makeExercise({ sets: 4, repMin: 8, repMax: 10, type: 'primary' });
+    expect(swapOverrides(outgoing, makeEntry({ defaultMeasure: 'reps' }))).toEqual({
+      sets: 4,
+      repMin: 8,
+      repMax: 10,
+      type: 'primary',
+    });
+  });
+
+  it('resets the target when the measure changes', () => {
+    const outgoing = makeExercise({ sets: 3, repMin: 8, repMax: 10, type: 'accessory' });
+    expect(swapOverrides(outgoing, makeEntry({ defaultMeasure: 'seconds' }))).toEqual({
+      sets: 3,
+      repMin: 45,
+      repMax: 45,
+      type: 'accessory',
+    });
+    expect(swapOverrides(outgoing, makeEntry({ defaultMeasure: 'laps' }))).toEqual({
+      sets: 3,
+      repMin: 1,
+      repMax: 1,
+      type: 'accessory',
+    });
+  });
+
+  it('resets back to reps coming off a timed movement', () => {
+    const plank = makeExercise({ measure: 'seconds', repMin: 45, repMax: 60, sets: 3 });
+    expect(swapOverrides(plank, makeEntry({ defaultMeasure: 'reps' }))).toMatchObject({
+      repMin: 10,
+      repMax: 10,
+    });
   });
 });

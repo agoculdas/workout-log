@@ -4,19 +4,20 @@ import { Button, ConfirmDialog, SegmentedControl } from '../../components';
 import {
   addExerciseFromCatalog,
   archiveExercise,
-  defaultIncrementFor,
   getCatalogEntriesByIds,
   listExercises,
   listTemplates,
+  readSettings,
   reorderExercises,
   upsertExercise,
 } from '../../db/repo';
-import type { CatalogEntry, Exercise, TemplateId } from '../../db/types';
+import type { CatalogEntry, Exercise, MassUnit, TemplateId } from '../../db/types';
 import { formatPrescription } from '../../logic/format';
+import { defaultIncrement, exerciseMassUnit } from '../../logic/units';
 import ExerciseSheet from './ExerciseSheet';
 import LibraryPickerSheet from './LibraryPickerSheet';
 import { draftToInput, incrementLabel, unitLabel, type ExerciseDraft } from './exerciseForm';
-import { muscleList } from './libraryUtils';
+import { muscleList, swapOverrides } from './libraryUtils';
 
 const TYPE_BADGE: Record<Exercise['type'], string> = {
   primary: 'bg-accent/15 text-accent',
@@ -59,7 +60,7 @@ function ExerciseRow({ exercise, muscles, first, last, onEdit, onMove }: RowProp
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted">
           <span>{formatPrescription(exercise)}</span>
           <span aria-hidden="true">·</span>
-          <span>{unitLabel(exercise.unit)}</span>
+          <span>{unitLabel(exercise.unit, exerciseMassUnit(exercise))}</span>
           <span aria-hidden="true">·</span>
           <span>{incrementLabel(exercise)}</span>
         </div>
@@ -101,6 +102,9 @@ export function DaysEditor() {
   const [templateId, setTemplateId] = useState<TemplateId>('lowerA');
 
   const exercises = useLiveQuery(() => listExercises(templateId), [templateId], []);
+  // Only for a brand-new custom row: everything else keeps its own denomination.
+  const settings = useLiveQuery(() => readSettings(), []);
+  const defaultMassUnit: MassUnit = settings?.units === 'lb' ? 'lb' : 'kg';
   const archived = useLiveQuery(
     () => listExercises(templateId, true).then((rows) => rows.filter((e) => e.archived)),
     [templateId],
@@ -184,12 +188,11 @@ export function DaysEditor() {
     }
     if (picker === 'swap' && editing) {
       // How you are running it carries over; what the movement *is* does not.
-      const incoming = await addExerciseFromCatalog(templateId, entry.id, {
-        sets: editing.sets,
-        repMin: editing.repMin,
-        repMax: editing.repMax,
-        type: editing.type,
-      });
+      const incoming = await addExerciseFromCatalog(
+        templateId,
+        entry.id,
+        swapOverrides(editing, entry),
+      );
       await takeOver(editing, incoming.id);
       setPicker(null);
       closeSheet();
@@ -222,7 +225,7 @@ export function DaysEditor() {
             unit: entry.defaultUnit,
             measure: entry.defaultMeasure,
             perSide: entry.unilateral,
-            increment: defaultIncrementFor(entry.defaultUnit),
+            increment: defaultIncrement(entry.defaultUnit, exerciseMassUnit(editing)),
           }
         : {}),
     });
@@ -294,7 +297,8 @@ export function DaysEditor() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm text-fg">{exercise.name}</span>
                     <span className="block text-xs text-muted">
-                      {formatPrescription(exercise)} · {unitLabel(exercise.unit)}
+                      {formatPrescription(exercise)} ·{' '}
+                      {unitLabel(exercise.unit, exerciseMassUnit(exercise))}
                     </span>
                   </span>
                   <Button
@@ -316,6 +320,7 @@ export function DaysEditor() {
         open={sheetOpen}
         exercise={editing}
         libraryEntry={editingEntry}
+        defaultMassUnit={defaultMassUnit}
         onClose={closeSheet}
         onSave={save}
         onDelete={() => setConfirmDelete(true)}
@@ -365,6 +370,7 @@ export function DaysEditor() {
         cancelLabel="Link only"
         onConfirm={() => void applyLink(true)}
         onCancel={() => void applyLink(false)}
+        onDismiss={() => setPendingLink(null)}
       />
 
       <ConfirmDialog

@@ -63,6 +63,12 @@ export interface ConfirmDialogProps {
   destructive?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /**
+   * Backing out without answering: backdrop tap and Escape. Omit and those
+   * fall back to `onCancel`, which is right when cancel means "do nothing" —
+   * pass it when cancel is a real second answer, so dismissing does neither.
+   */
+  onDismiss?: () => void;
 }
 
 /** Yes/no confirmation built on `Sheet` — used for wipe, delete, finish. */
@@ -75,11 +81,12 @@ export function ConfirmDialog({
   destructive = true,
   onConfirm,
   onCancel,
+  onDismiss,
 }: ConfirmDialogProps) {
   return (
     <Sheet
       open={open}
-      onClose={onCancel}
+      onClose={onDismiss ?? onCancel}
       title={title}
       footer={
         <div className="flex gap-3">

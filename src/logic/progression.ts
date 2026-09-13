@@ -1,4 +1,6 @@
 import type { Exercise, SetLog } from '../db/types';
+import { workingSets } from './sets';
+import { exerciseMassUnit, massLabel } from './units';
 
 export interface LoadSuggestion {
   /** Suggested load in the exercise's unit. 0 when there is nothing to load. */
@@ -19,8 +21,12 @@ export function targetReps(exercise: Exercise): number {
   return exercise.repMin;
 }
 
-/** Keeps only the sets belonging to the newest session present in the array. */
-export function setsFromLastSession(sets: SetLog[]): SetLog[] {
+/**
+ * Keeps only the working sets belonging to the newest session present in the
+ * array. Warm-ups are dropped before anything else is decided.
+ */
+export function setsFromLastSession(input: SetLog[]): SetLog[] {
+  const sets = workingSets(input);
   if (sets.length === 0) return [];
   let newest = sets[0]!;
   for (const set of sets) if (set.completedAt > newest.completedAt) newest = set;
@@ -50,7 +56,9 @@ function formatKg(n: number): string {
  * - conditioning: load 0, reps pre-filled with the last time.
  *
  * `lastSets` should come from `getLastSessionSetsForExercise`. Sets belonging
- * to an older session are ignored if several sessions are passed in.
+ * to an older session are ignored if several sessions are passed in, and so
+ * are warm-ups. The increment is applied as-is: it is already in the
+ * exercise's own `massUnit`. Set facts (`toFailure`) are never read.
  */
 export function suggestLoad(
   exercise: Exercise,
@@ -101,7 +109,7 @@ export function suggestLoad(
       reps: target,
       reason: `All ${exercise.sets} sets hit ${exercise.repMax} — add ${formatKg(
         exercise.increment,
-      )} kg.`,
+      )} ${massLabel(exerciseMassUnit(exercise))}.`,
       progressed: true,
     };
   }

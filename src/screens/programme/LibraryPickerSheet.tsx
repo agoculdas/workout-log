@@ -4,6 +4,7 @@ import { Sheet } from '../../components';
 import { listCatalog, listExercises, listTemplates } from '../../db/repo';
 import type { CatalogEntry, Exercise, SplitTag } from '../../db/types';
 import { formatPrescription } from '../../logic/format';
+import { exerciseMassUnit } from '../../logic/units';
 import { unitLabel } from './exerciseForm';
 import { CatalogFilters, CatalogRow } from './CatalogRow';
 import { appearsInLabel, groupByCatalogId, templateNames, toggleFilter } from './libraryUtils';
@@ -81,7 +82,7 @@ export function LibraryPickerSheet({
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-base text-fg">{row.name}</span>
                     <span className="block text-xs text-muted">
-                      {formatPrescription(row)} · {unitLabel(row.unit)}
+                      {formatPrescription(row)} · {unitLabel(row.unit, exerciseMassUnit(row))}
                     </span>
                   </span>
                   <span className="shrink-0 text-xs text-accent">Restore</span>

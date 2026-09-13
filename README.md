@@ -68,6 +68,18 @@ Once installed it launches full-screen, portrait, and works with the phone in ae
   work once the app is installed to the home screen (iOS 16.4+).
 - **Persistent storage** is requested at launch, so the browser will not evict the log when space
   runs low. Settings → About shows whether it was granted.
+- **Warm-up sets.** "+ Warm-up set" on any exercise adds a dimmed row above the working sets,
+  pre-filled at half the suggested load and resting for half as long (30 s minimum). Warm-ups are
+  logged but never counted: they stay out of progression, volume, top sets and the muscle tallies,
+  and a row can be removed again before or after you log it.
+- **To failure.** The **F** button beside the reps field marks a set as taken to failure. It is
+  recorded and reported, and it is deliberately inert — set facts never move a suggestion.
+- **Plate calculator.** On a barbell exercise loaded as a total, tapping the **kg** suffix on the
+  load field shows the per-side breakdown against your bar weight and plate set (Settings →
+  Plates), what that actually comes to, and what is left over when the number is unreachable.
+- **Finish summary.** Ending a session shows duration, sets, volume and a line per exercise, with
+  "↑ from 60 kg" wherever the top set beat the last one.
+- **Backup note.** Today shows one muted line when the last export is more than a fortnight old.
 - **Past sessions are editable.** History → expand a session → expand an exercise to correct or
   delete any set, and edit the session note. Each session also stores its exercises as they were
   prescribed that day, so renaming or reordering on the Programme tab never rewrites history.

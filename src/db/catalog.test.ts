@@ -19,6 +19,7 @@ import {
   logSet,
   renameCatalogEntry,
   startSession,
+  updateSettings,
   upsertCatalogEntry,
   upsertExercise,
   wipeAll,
@@ -522,5 +523,72 @@ describe('export / import with the catalogue', () => {
     });
     expect(fresh.exercises).toBe(1);
     expect((await db.exercises.get('ex_legacy'))?.catalogId).toBeUndefined();
+  });
+});
+
+describe('addExerciseFromCatalog — denomination', () => {
+  it('takes the default denomination and its increment from Settings', async () => {
+    const kg = await addExerciseFromCatalog('lowerA', 'cat_back_squat');
+    expect(kg).toMatchObject({ massUnit: 'kg', increment: 2.5 });
+
+    await updateSettings({ units: 'lb' });
+    const lb = await addExerciseFromCatalog('lowerA', 'cat_front_squat');
+    expect(lb).toMatchObject({ massUnit: 'lb', increment: 5 });
+
+    // Nothing to load means no step, whatever the denomination.
+    const plank = await addExerciseFromCatalog('upperA', 'cat_plank');
+    expect(plank).toMatchObject({ massUnit: 'lb', unit: 'bodyweight', increment: 0 });
+
+    // An override wins over the setting, and drags the increment with it.
+    const forced = await addExerciseFromCatalog('lowerA', 'cat_leg_press', {
+      massUnit: 'kg',
+    });
+    expect(forced).toMatchObject({ massUnit: 'kg', increment: 2.5 });
+  });
+
+  it('upsertExercise defaults a new row from Settings and keeps it on edit', async () => {
+    await updateSettings({ units: 'lb' });
+    const created = await upsertExercise({
+      templateId: 'lowerA',
+      name: 'Pin press',
+      sets: 3,
+      repMin: 10,
+      repMax: 10,
+      measure: 'reps',
+      perSide: false,
+      unit: 'kg_total',
+      increment: 5,
+      type: 'accessory',
+    });
+    expect(created.massUnit).toBe('lb');
+
+    // Editing something else does not re-read the setting.
+    await updateSettings({ units: 'kg' });
+    const edited = await upsertExercise({ ...created, name: 'Pin press (top half)' });
+    expect(edited.massUnit).toBe('lb');
+
+    // Seeded rows have none, so they keep reading as kilograms.
+    const seeded = await upsertExercise({
+      ...(await db.exercises.get('ex_hack_squat'))!,
+      sets: 5,
+    });
+    expect(seeded.massUnit).toBe('kg');
+  });
+});
+
+describe('reports ignore warm-ups', () => {
+  it('leaves warm-up sets out of the muscle tally and the pattern balance', async () => {
+    const session = await startSession('lowerA', 1_000);
+    // Hack squat: quads primary, glutes + adductors secondary, pattern squat.
+    await logSet({ sessionId: session.id, exerciseId: 'ex_hack_squat', setIndex: 0, load: 40, reps: 10, completedAt: 1_050, kind: 'warmup' });
+    await logSet({ sessionId: session.id, exerciseId: 'ex_hack_squat', setIndex: 1, load: 80, reps: 10, completedAt: 1_100 });
+    await finishSession(session.id);
+
+    const result = await getMuscleVolume({ from: 0, to: 5_000 });
+    expect(muscle(result, 'quads')).toMatchObject({ sets: 1, weightedSets: 1, sessions: 1 });
+    expect(muscle(result, 'glutes').weightedSets).toBe(0.5);
+    expect(result.unlinkedSets).toBe(0);
+
+    expect(await getPatternBalance({ from: 0, to: 5_000 })).toMatchObject({ squat: 1 });
   });
 });

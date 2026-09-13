@@ -11,6 +11,7 @@ import {
   LabelList,
   Line,
   LineChart,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -37,6 +38,8 @@ interface FrameProps {
   aside?: ReactNode;
   height: number;
   children: ReactNode;
+  /** One quiet line under the plot, e.g. what a shaded band means. */
+  caption?: ReactNode;
 }
 
 /**
@@ -44,7 +47,7 @@ interface FrameProps {
  * parent, so the parent must not be an auto-height flex child — hence the
  * explicit height and `min-w-0` here rather than on the caller.
  */
-function ChartFrame({ title, aside, height, children }: FrameProps) {
+function ChartFrame({ title, aside, height, children, caption }: FrameProps) {
   return (
     <section className="min-w-0 rounded-2xl border border-border/70 bg-surface p-3">
       <div className="mb-1 flex items-baseline justify-between gap-2">
@@ -54,6 +57,7 @@ function ChartFrame({ title, aside, height, children }: FrameProps) {
       <div className="min-w-0" style={{ height }}>
         {children}
       </div>
+      {caption ? <p className="mt-2 text-xs text-muted">{caption}</p> : null}
     </section>
   );
 }
@@ -236,6 +240,10 @@ export interface MuscleBarsChartProps {
   data: MuscleBarRow[];
   title?: string;
   aside?: ReactNode;
+  /** Weekly hard-set band, drawn behind the bars as a shaded reference. */
+  band?: { min: number; max: number };
+  /** One line under the plot; the band's only explanation. */
+  caption?: ReactNode;
 }
 
 /**
@@ -247,6 +255,8 @@ export function MuscleBarsChart({
   data,
   title = 'Sets per week',
   aside,
+  band,
+  caption,
 }: MuscleBarsChartProps) {
   if (!data.length) {
     return (
@@ -259,9 +269,17 @@ export function MuscleBarsChart({
   }
 
   const max = Math.max(...data.map((row) => row.perWeek));
+  // The band is the point of comparison, so it has to fit on the axis even
+  // when every bar is well short of it.
+  const upper = Math.max(max * 1.18, band ? band.max * 1.06 : 0) || 1;
 
   return (
-    <ChartFrame title={title} aside={aside} height={data.length * 24 + 12}>
+    <ChartFrame
+      title={title}
+      aside={aside}
+      height={data.length * 24 + 12}
+      caption={band ? caption : undefined}
+    >
       <ResponsiveContainer width="100%" height="100%">
         <BarChart
           data={data}
@@ -269,7 +287,7 @@ export function MuscleBarsChart({
           margin={{ top: 2, right: 34, bottom: 2, left: 0 }}
           barCategoryGap="18%"
         >
-          <XAxis type="number" hide domain={[0, max * 1.18]} />
+          <XAxis type="number" hide domain={[0, upper]} />
           <YAxis
             type="category"
             dataKey="label"
@@ -278,6 +296,16 @@ export function MuscleBarsChart({
             {...AXIS_STYLE}
             tick={{ ...AXIS_STYLE.tick, fontSize: 11 }}
           />
+          {band ? (
+            <ReferenceArea
+              x1={band.min}
+              x2={band.max}
+              fill={CHART_COLORS.accent}
+              fillOpacity={0.12}
+              stroke="none"
+              ifOverflow="hidden"
+            />
+          ) : null}
           <Tooltip
             cursor={{ fill: CHART_COLORS.border, fillOpacity: 0.35 }}
             content={(props) => {

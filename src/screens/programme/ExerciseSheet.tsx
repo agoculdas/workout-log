@@ -1,14 +1,18 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Button, NumberField, Sheet } from '../../components';
-import type { CatalogEntry, Exercise } from '../../db/types';
-import { SelectField, TextField, ToggleRow } from './Field';
+import { Button, NumberField, SegmentedControl, Sheet } from '../../components';
+import type { CatalogEntry, Exercise, MassUnit } from '../../db/types';
+import { massLabel } from '../../logic/units';
+import { FieldLabel, SelectField, TextField, ToggleRow } from './Field';
 import {
+  MASS_UNIT_OPTIONS,
   MEASURE_OPTIONS,
   TYPE_OPTIONS,
   UNIT_OPTIONS,
   blankDraft,
+  changeMassUnit,
   draftFromExercise,
+  hasDenomination,
   incrementDisabled,
   validateDraft,
   type ExerciseDraft,
@@ -20,6 +24,8 @@ export interface ExerciseSheetProps {
   exercise: Exercise | undefined;
   /** The library entry `exercise.catalogId` resolves to, when it has one. */
   libraryEntry?: CatalogEntry | undefined;
+  /** Denomination a brand-new exercise starts in (Settings → Units). */
+  defaultMassUnit?: MassUnit;
   onClose: () => void;
   onSave: (draft: ExerciseDraft) => void | Promise<void>;
   onDelete: () => void;
@@ -76,6 +82,7 @@ export function ExerciseSheet({
   open,
   exercise,
   libraryEntry,
+  defaultMassUnit = 'kg',
   onClose,
   onSave,
   onDelete,
@@ -85,9 +92,11 @@ export function ExerciseSheet({
   // The parent remounts this sheet per target (see its `key`), so the draft is
   // seeded once and never fights a live query refresh while you type.
   const [draft, setDraft] = useState<ExerciseDraft>(() =>
-    exercise ? draftFromExercise(exercise) : blankDraft(),
+    exercise ? draftFromExercise(exercise) : blankDraft(defaultMassUnit),
   );
   const [showErrors, setShowErrors] = useState(false);
+  // Once you have typed your own step, switching kg/lb leaves it alone.
+  const [incrementEdited, setIncrementEdited] = useState(false);
 
   const errors = validateDraft(draft);
   const visible = showErrors ? errors : {};
@@ -201,13 +210,33 @@ export function ExerciseSheet({
           }
         />
 
+        {hasDenomination(draft.unit) ? (
+          <div>
+            <FieldLabel>Denomination</FieldLabel>
+            <SegmentedControl
+              label="Denomination"
+              value={draft.massUnit}
+              options={MASS_UNIT_OPTIONS}
+              onChange={(massUnit) =>
+                patch(changeMassUnit(draft, massUnit, incrementEdited))
+              }
+            />
+            <p className="mt-1 text-xs text-muted">
+              What this machine or rack is marked in. Stored per exercise.
+            </p>
+          </div>
+        ) : null}
+
         <NumberField
           label="Increment"
           value={noIncrement ? 0 : draft.increment}
-          onChange={(increment) => patch({ increment })}
-          step={0.5}
+          onChange={(increment) => {
+            setIncrementEdited(true);
+            patch({ increment });
+          }}
+          step={draft.massUnit === 'lb' ? 1 : 0.5}
           min={0}
-          suffix="kg"
+          suffix={massLabel(draft.massUnit)}
           disabled={noIncrement}
           hint={
             visible.increment ??

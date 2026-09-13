@@ -1,6 +1,6 @@
 # Workout Log — feature expansion plan
 
-_Last updated 2026-09-13. Source of truth for what comes next; edit freely._
+_Last updated 2026-09-13 (decisions taken). Source of truth for what comes next; edit freely._
 
 ## Where things stand (v1.2)
 
@@ -141,15 +141,17 @@ Low risk, no schema migration except new settings fields. One session of work fo
 4. **4.1 supersets** if your programme uses them; the rest of Phase 4 on demand.
 5. **Phase 5** only when a concrete need appears.
 
-## Decisions needed before Phase 2
+## Decisions (taken 2026-09-13)
 
-1. **Rest days in the rotation**: informational slots as proposed, or a rotation of training days only?
-2. **Multiple saved programmes** with one active, or a single editable one?
-3. **Presets**: which of the five are worth shipping? Any specific programme you'd want seeded?
-4. **RIR logging**: wanted, and should it ever affect load suggestions?
-5. **Supersets**: do you run any today?
-6. **Pounds** and **imports**: any real need?
-7. **Sets-per-muscle target**: 10–20 per week as the default range?
+1. **Rest days** are informational slots in the rotation.
+2. **Programmes**: several saved, all editable in place, exactly one active. No separate "edit mode"; delete is the only action behind a confirm, and nothing destructive sits near session controls.
+3. **Presets**: ship the five listed; nothing custom seeded.
+4. **Set facts never drive suggestions.** "To failure" is a per-set button (replaces RIR chips). No nagging anywhere: the backup note is one muted line, the weekly review is on demand only, no suggestion cards on Today.
+5. **Supersets**: not now.
+6. **Pounds** are a per-exercise denomination (`Exercise.massUnit`), because some machines are marked in lb. Not a global switch. Moved into Phase 1. Imports: no.
+7. **Sets per muscle**: default band 10–20 hard sets per week, shown as a reference band on the Muscles chart, editable, silent.
+
+**Implementation**: grunt work runs on cheaper (Sonnet) agents from precise briefs; the lead plans and verifies.
 
 ## Non-goals, unchanged
 

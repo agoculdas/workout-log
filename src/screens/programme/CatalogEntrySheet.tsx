@@ -236,10 +236,11 @@ export function CatalogEntrySheet({ open, entry, onClose, onSaved }: CatalogEntr
         destructive={false}
         title={`Also rename ${pendingRename ?? 0} programme exercise${pendingRename === 1 ? '' : 's'}?`}
         message={`“${entry?.name ?? ''}” is on your programme under its old name. Renaming keeps everything pointing at this movement either way — logged sets are never rewritten.`}
-        confirmLabel="Rename them"
-        cancelLabel="Keep their names"
+        confirmLabel={`Rename all ${pendingRename ?? 0}`}
+        cancelLabel="Only the library"
         onConfirm={() => void commit(true)}
         onCancel={() => void commit(false)}
+        onDismiss={() => setPendingRename(null)}
       />
     </>
   );

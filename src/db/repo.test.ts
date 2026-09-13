@@ -18,6 +18,11 @@ import {
   listExercises,
   listTemplates,
   logSet,
+  markExported,
+  getSessionSummary,
+  updateSession,
+  updateSet,
+  listSetsForSessionExercise,
   reorderExercises,
   startSession,
   updateSettings,
@@ -104,14 +109,60 @@ describe('settings defaults', () => {
     const settings = await getSettings();
     expect(settings.restPrimary).toBe(100);
     expect(settings.keepAwake).toBe(true);
-    expect(await readSettings()).toMatchObject({ restAccessory: 80, keepAwake: true });
+    // Fields added after that row was written come from DEFAULT_SETTINGS.
+    expect(settings.barWeight).toBe(20);
+    expect(settings.plates).toEqual([25, 20, 15, 10, 5, 2.5, 1.25]);
+    expect(settings.setsPerMuscleTarget).toEqual({ min: 10, max: 20 });
+    expect(settings.lastExportAt).toBeUndefined();
+    expect(await readSettings()).toMatchObject({
+      restAccessory: 80,
+      keepAwake: true,
+      barWeight: 20,
+      setsPerMuscleTarget: { min: 10, max: 20 },
+    });
+
+    // The filled-in containers are copies — mutating one cannot poison the next read.
+    settings.plates.push(0.5);
+    settings.setsPerMuscleTarget.min = 99;
+    expect((await getSettings()).plates).toEqual([25, 20, 15, 10, 5, 2.5, 1.25]);
+    expect((await getSettings()).setsPerMuscleTarget).toEqual({ min: 10, max: 20 });
 
     // Writing anything back persists the filled-in defaults too.
     await updateSettings({ restPrimary: 110 });
     expect(await db.settings.get('settings')).toMatchObject({
       restPrimary: 110,
       keepAwake: true,
+      barWeight: 20,
+      plates: [25, 20, 15, 10, 5, 2.5, 1.25],
     });
+  });
+
+  it('keeps an explicit plate list and band', async () => {
+    await updateSettings({
+      barWeight: 15,
+      plates: [20, 10, 5],
+      setsPerMuscleTarget: { min: 8, max: 16 },
+    });
+    expect(await getSettings()).toMatchObject({
+      barWeight: 15,
+      plates: [20, 10, 5],
+      setsPerMuscleTarget: { min: 8, max: 16 },
+    });
+  });
+});
+
+describe('markExported', () => {
+  it('stamps the backup time, and exportAll does not', async () => {
+    expect((await getSettings()).lastExportAt).toBeUndefined();
+
+    await exportAll();
+    expect((await getSettings()).lastExportAt).toBeUndefined();
+
+    const before = Date.now();
+    await markExported();
+    const stamped = (await getSettings()).lastExportAt!;
+    expect(stamped).toBeGreaterThanOrEqual(before);
+    expect(stamped).toBeLessThanOrEqual(Date.now());
   });
 });
 
@@ -216,6 +267,7 @@ describe('exercise snapshots', () => {
       measure: live[0]!.measure,
       perSide: live[0]!.perSide,
       unit: live[0]!.unit,
+      massUnit: 'kg',
       type: live[0]!.type,
       catalogId: live[0]!.catalogId,
     });
@@ -368,5 +420,264 @@ describe('export / import', () => {
     expect(await db.setLogs.count()).toBe(0);
     expect(await listExercises()).toHaveLength(28);
     expect(await getSettings()).toMatchObject({ restPrimary: 120 });
+  });
+});
+
+describe('logSet — kind, toFailure and denomination', () => {
+  it('stamps the exercise denomination when none is given', async () => {
+    const session = await startSession('lowerA');
+    const kg = await logSet({
+      sessionId: session.id,
+      exerciseId: 'ex_hack_squat',
+      setIndex: 0,
+      load: 80,
+      reps: 10,
+    });
+    // Seeded rows carry no massUnit at all, so they read as kilograms.
+    expect(kg.massUnit).toBe('kg');
+
+    const pounds = await upsertExercise({
+      templateId: 'lowerA',
+      name: 'Pin press (lb stack)',
+      sets: 3,
+      repMin: 10,
+      repMax: 10,
+      measure: 'reps',
+      perSide: false,
+      unit: 'kg_total',
+      massUnit: 'lb',
+      increment: 5,
+      type: 'accessory',
+    });
+    const lb = await logSet({
+      sessionId: session.id,
+      exerciseId: pounds.id,
+      setIndex: 0,
+      load: 100,
+      reps: 10,
+    });
+    expect(lb.massUnit).toBe('lb');
+
+    // An explicit denomination wins, and an unknown exercise falls back to kg.
+    const forced = await logSet({
+      sessionId: session.id,
+      exerciseId: pounds.id,
+      setIndex: 1,
+      load: 45,
+      reps: 10,
+      massUnit: 'kg',
+    });
+    expect(forced.massUnit).toBe('kg');
+    const orphan = await logSet({
+      sessionId: session.id,
+      exerciseId: 'ex_does_not_exist',
+      setIndex: 0,
+      load: 10,
+      reps: 10,
+    });
+    expect(orphan.massUnit).toBe('kg');
+  });
+
+  it('records warm-ups and set facts, and updateSet can flip them', async () => {
+    const session = await startSession('lowerA');
+    const warm = await logSet({
+      sessionId: session.id,
+      exerciseId: 'ex_hack_squat',
+      setIndex: 0,
+      load: 40,
+      reps: 10,
+      kind: 'warmup',
+    });
+    const working = await logSet({
+      sessionId: session.id,
+      exerciseId: 'ex_hack_squat',
+      setIndex: 1,
+      load: 80,
+      reps: 10,
+      toFailure: true,
+    });
+    expect(warm.kind).toBe('warmup');
+    expect(warm).not.toHaveProperty('toFailure');
+    expect(working.kind).toBeUndefined();
+    expect(working.toFailure).toBe(true);
+
+    await updateSet(warm.id, { kind: undefined });
+    await updateSet(working.id, { toFailure: false });
+    const rows = await listSetsForSessionExercise(session.id, 'ex_hack_squat');
+    expect(rows[0]!.kind).toBeUndefined();
+    expect(rows[1]!.toFailure).toBe(false);
+  });
+});
+
+describe('getSessionSummary', () => {
+  /** A finished Lower A at 80 kg, so the next one has something to beat. */
+  async function previousSession() {
+    const first = await startSession('lowerA', 1_000);
+    await logSet({ sessionId: first.id, exerciseId: 'ex_hack_squat', setIndex: 0, load: 80, reps: 10, completedAt: 1_100 });
+    await logSet({ sessionId: first.id, exerciseId: 'ex_leg_curl_a', setIndex: 0, load: 40, reps: 10, completedAt: 1_200 });
+    await finishSession(first.id);
+    await updateSession(first.id, { finishedAt: 2_000 });
+    return first;
+  }
+
+  it('reports duration, sets, warm-ups, volume and what progressed', async () => {
+    await previousSession();
+
+    const session = await startSession('lowerA', 10_000);
+    await logSet({ sessionId: session.id, exerciseId: 'ex_hack_squat', setIndex: 0, load: 40, reps: 10, completedAt: 10_100, kind: 'warmup' });
+    await logSet({ sessionId: session.id, exerciseId: 'ex_hack_squat', setIndex: 1, load: 85, reps: 10, completedAt: 10_200, toFailure: true });
+    await logSet({ sessionId: session.id, exerciseId: 'ex_leg_curl_a', setIndex: 0, load: 40, reps: 10, completedAt: 10_300 });
+    await finishSession(session.id);
+    await updateSession(session.id, { finishedAt: 12_000 });
+
+    const summary = (await getSessionSummary(session.id))!;
+    expect(summary.templateName).toBe('Lower A');
+    expect(summary.durationMs).toBe(2_000);
+    expect(summary.setsLogged).toBe(2);
+    expect(summary.warmups).toBe(1);
+    expect(summary.volumeKg).toBe(85 * 10 + 40 * 10);
+
+    // Only the exercises that were actually logged.
+    expect(summary.exercises.map((e) => e.exerciseId)).toEqual([
+      'ex_hack_squat',
+      'ex_leg_curl_a',
+    ]);
+
+    const squat = summary.exercises[0]!;
+    expect(squat).toMatchObject({
+      name: 'Hack squat (feet ahead, wide)',
+      summary: '1×10 @ 85 kg',
+      toFailure: 1,
+      progressed: true,
+      previousTop: 80,
+      top: 85,
+      massUnit: 'kg',
+    });
+
+    const curl = summary.exercises[1]!;
+    expect(curl).toMatchObject({ progressed: false, previousTop: 40, top: 40, toFailure: 0 });
+  });
+
+  it('claims nothing without a previous completed session', async () => {
+    const session = await startSession('lowerA', 1_000);
+    await logSet({ sessionId: session.id, exerciseId: 'ex_hack_squat', setIndex: 0, load: 80, reps: 10, completedAt: 1_100 });
+
+    const summary = (await getSessionSummary(session.id))!;
+    const squat = summary.exercises[0]!;
+    expect(squat.progressed).toBe(false);
+    expect(squat.previousTop).toBeUndefined();
+    expect(squat.top).toBe(80);
+    // Still running: the duration counts up from the start.
+    expect(summary.durationMs).toBeGreaterThan(0);
+
+    // An unfinished earlier session is not something to beat either.
+    const open = await startSession('lowerA', 5_000);
+    await logSet({ sessionId: open.id, exerciseId: 'ex_hack_squat', setIndex: 0, load: 90, reps: 10, completedAt: 5_100 });
+    const later = await startSession('lowerA', 9_000);
+    await logSet({ sessionId: later.id, exerciseId: 'ex_hack_squat', setIndex: 0, load: 85, reps: 10, completedAt: 9_100 });
+    expect((await getSessionSummary(later.id))!.exercises[0]!.progressed).toBe(false);
+  });
+
+  it('totals mixed denominations in kilograms', async () => {
+    const pounds = await upsertExercise({
+      templateId: 'lowerA',
+      name: 'Pin press (lb stack)',
+      sets: 3,
+      repMin: 10,
+      repMax: 10,
+      measure: 'reps',
+      perSide: false,
+      unit: 'kg_total',
+      massUnit: 'lb',
+      increment: 5,
+      type: 'accessory',
+    });
+    const session = await startSession('lowerA', 1_000);
+    await logSet({ sessionId: session.id, exerciseId: 'ex_hack_squat', setIndex: 0, load: 100, reps: 10, completedAt: 1_100 });
+    await logSet({ sessionId: session.id, exerciseId: pounds.id, setIndex: 0, load: 100, reps: 10, completedAt: 1_200 });
+
+    const summary = (await getSessionSummary(session.id))!;
+    expect(summary.volumeKg).toBeCloseTo(1_000 + 453.59237, 5);
+    const lb = summary.exercises.find((e) => e.exerciseId === pounds.id)!;
+    expect(lb.massUnit).toBe('lb');
+    expect(lb.summary).toBe('1×10 @ 100 lb');
+  });
+
+  it('returns undefined for a session that is not there', async () => {
+    expect(await getSessionSummary('nope')).toBeUndefined();
+  });
+});
+
+describe('import tolerance for the new optional fields', () => {
+  const foreignSettings = {
+    id: 'settings',
+    restPrimary: 111,
+    restAccessory: 77,
+    units: 'lb',
+    keepAwake: false,
+    lastExportAt: 1234,
+    barWeight: 15,
+    plates: [20, 10],
+    setsPerMuscleTarget: { min: 8, max: 16 },
+  };
+
+  it('merges warm-ups, set facts and denominations', async () => {
+    const counts = await importMerge({
+      version: 1,
+      exportedAt: Date.now(),
+      exercises: [
+        {
+          id: 'ex_foreign',
+          templateId: 'lowerA',
+          name: 'Foreign press',
+          sets: 3,
+          repMin: 10,
+          repMax: 10,
+          measure: 'reps',
+          perSide: false,
+          unit: 'kg_total',
+          massUnit: 'lb',
+          increment: 5,
+          type: 'accessory',
+          order: 99,
+        },
+      ],
+      sessions: [{ id: 'foreign-1', templateId: 'lowerA', startedAt: 1, finishedAt: 2 }],
+      setLogs: [
+        { id: 'fs-warm', sessionId: 'foreign-1', exerciseId: 'ex_foreign', setIndex: 0, load: 45, reps: 10, completedAt: 1, kind: 'warmup', massUnit: 'lb' },
+        { id: 'fs-work', sessionId: 'foreign-1', exerciseId: 'ex_foreign', setIndex: 1, load: 95, reps: 10, completedAt: 2, toFailure: true, massUnit: 'lb' },
+      ],
+      settings: [foreignSettings],
+    });
+
+    expect(counts).toMatchObject({ exercises: 1, sessions: 1, setLogs: 2, skipped: 0 });
+    expect(await db.exercises.get('ex_foreign')).toMatchObject({ massUnit: 'lb' });
+    expect(await db.setLogs.get('fs-warm')).toMatchObject({ kind: 'warmup', massUnit: 'lb' });
+    expect(await db.setLogs.get('fs-work')).toMatchObject({ toFailure: true, massUnit: 'lb' });
+
+    // The local settings row already exists, so the foreign one is not applied.
+    expect((await getSettings()).restPrimary).toBe(120);
+
+    const summary = (await getSessionSummary('foreign-1'))!;
+    expect(summary.setsLogged).toBe(1);
+    expect(summary.warmups).toBe(1);
+    expect(summary.volumeKg).toBeCloseTo(95 * 10 * 0.45359237, 5);
+  });
+
+  it('takes a settings row carrying the new fields when there is none', async () => {
+    await db.settings.clear();
+    const counts = await importMerge({
+      version: 1,
+      exportedAt: Date.now(),
+      settings: [foreignSettings],
+    });
+    expect(counts.settings).toBe(1);
+    expect(await getSettings()).toMatchObject({
+      units: 'lb',
+      lastExportAt: 1234,
+      barWeight: 15,
+      plates: [20, 10],
+      setsPerMuscleTarget: { min: 8, max: 16 },
+    });
   });
 });

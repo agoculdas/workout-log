@@ -14,6 +14,16 @@ export type ExerciseType = 'primary' | 'accessory' | 'conditioning';
  */
 export type LoadUnit = 'kg_side' | 'kg_total' | 'band' | 'bodyweight' | 'none';
 
+/**
+ * The denomination a load is entered and shown in. Orthogonal to `LoadUnit`,
+ * which only says whether the number is per side or total: a dumbbell rack
+ * marked in pounds is `unit: 'kg_side'`, `massUnit: 'lb'`.
+ */
+export type MassUnit = 'kg' | 'lb';
+
+/** One pound in kilograms (exact, by definition). */
+export const KG_PER_LB = 0.45359237;
+
 /** What the `reps` number on a SetLog counts. */
 export type Measure = 'reps' | 'seconds' | 'laps';
 
@@ -140,7 +150,15 @@ export interface Exercise {
   /** "each" / per-side item — display only, does not change the maths. */
   perSide: boolean;
   unit: LoadUnit;
-  /** Progression step in kg. 0 for band / bodyweight / none. */
+  /**
+   * The denomination this exercise's load is entered and shown in. Absent
+   * means 'kg'. Only meaningful for `kg_side` / `kg_total` units.
+   */
+  massUnit?: MassUnit;
+  /**
+   * Progression step, in this exercise's `massUnit`. 0 for band / bodyweight /
+   * none.
+   */
   increment: number;
   type: ExerciseType;
   /** Soft delete, so old sessions can still resolve the name. */
@@ -162,6 +180,7 @@ export type ExerciseSnapshot = Pick<
   | 'measure'
   | 'perSide'
   | 'unit'
+  | 'massUnit'
   | 'type'
   | 'catalogId'
 >;
@@ -185,11 +204,23 @@ export interface SetLog {
   exerciseId: string;
   /** 0-based index of the set within the exercise for this session. */
   setIndex: number;
-  /** In the exercise's `unit`. 0 for bodyweight / none. */
+  /** In the exercise's `unit` and `massUnit`. 0 for bodyweight / none. */
   load: number;
   /** Reps, seconds or laps depending on `exercise.measure`. */
   reps: number;
   completedAt: number;
+  /**
+   * Absent (the default) means a working set. Warm-ups are excluded from
+   * progression, volume, top sets and muscle tallies everywhere.
+   */
+  kind?: 'warmup';
+  /**
+   * A fact the user marked on the set. Never read by progression — set facts
+   * do not drive suggestions.
+   */
+  toFailure?: boolean;
+  /** Stamped from the exercise when the set was logged. Absent means 'kg'. */
+  massUnit?: MassUnit;
 }
 
 export interface Settings {
@@ -198,9 +229,18 @@ export interface Settings {
   restPrimary: number;
   /** Rest timer default in seconds for accessories. */
   restAccessory: number;
-  units: 'kg';
+  /** Default denomination for exercises created from now on. */
+  units: MassUnit;
   /** Hold a screen wake lock while the Session screen is open. */
   keepAwake: boolean;
+  /** Epoch ms of the last successful export. Absent means never exported. */
+  lastExportAt?: number;
+  /** Barbell weight in kg, for the plate calculator. */
+  barWeight: number;
+  /** Plates available per side, in kg, for the plate calculator. */
+  plates: number[];
+  /** Weekly hard-set band per muscle, shown as a reference on the report. */
+  setsPerMuscleTarget: { min: number; max: number };
 }
 
 export interface BodyweightEntry {

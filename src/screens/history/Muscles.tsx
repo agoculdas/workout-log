@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Card } from '../../components';
+import { Card, Chip } from '../../components';
 import {
   getCatalogEntriesByIds,
   getMuscleVolume,
@@ -8,6 +8,7 @@ import {
   listAllSetLogs,
   listExercises,
   listSessions,
+  readSettings,
 } from '../../db/repo';
 import { MuscleBarsChart, WeekTrendChart } from './charts';
 import {
@@ -42,12 +43,13 @@ export function MusclesSection() {
   const data = useLiveQuery(async () => {
     const now = Date.now();
     const from = windowStart(weeks, now);
-    const [volume, balance, allSets, sessions, exercises] = await Promise.all([
+    const [volume, balance, allSets, sessions, exercises, settings] = await Promise.all([
       getMuscleVolume({ from, to: now }),
       getPatternBalance({ from, to: now }),
       listAllSetLogs(),
       listSessions(false),
       listExercises(undefined, true),
+      readSettings(),
     ]);
     const links = catalogLinks(sessions, exercises);
     const catalog = await getCatalogEntriesByIds(linkedCatalogIds(links));
@@ -58,26 +60,19 @@ export function MusclesSection() {
       weeks,
       now,
     );
-    return { volume, balance, trend };
+    return { volume, balance, trend, band: settings?.setsPerMuscleTarget };
   }, [weeks]);
 
   const chips = (
     <div role="group" aria-label="Window" className="flex gap-2 overflow-x-auto pb-0.5">
       {MUSCLE_WINDOWS.map((option) => (
-        <button
+        <Chip
           key={option.weeks}
-          type="button"
-          aria-pressed={weeks === option.weeks}
+          selected={weeks === option.weeks}
           onClick={() => setWeeks(option.weeks)}
-          className={[
-            'min-h-11 shrink-0 rounded-full border px-3 text-sm font-medium transition-colors',
-            weeks === option.weeks
-              ? 'border-accent/60 bg-accent/15 text-accent'
-              : 'border-border/70 bg-surface text-muted',
-          ].join(' ')}
         >
           {option.label}
-        </button>
+        </Chip>
       ))}
     </div>
   );
@@ -91,7 +86,7 @@ export function MusclesSection() {
     );
   }
 
-  const { volume, balance, trend } = data;
+  const { volume, balance, trend, band } = data;
   const trained = activeWeeks(trend);
   const sessionCount = trend.reduce((sum, point) => sum + point.sessions, 0);
   const rows = perWeekRows(volume, trained);
@@ -129,6 +124,8 @@ export function MusclesSection() {
       <MuscleBarsChart
         data={bars}
         aside={`${split.trained.length} muscle${split.trained.length === 1 ? '' : 's'}`}
+        band={band}
+        caption={band ? `Shaded band: ${band.min}–${band.max} sets/week` : undefined}
       />
 
       {split.untouched.length ? (
