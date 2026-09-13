@@ -1,5 +1,9 @@
-/** One of the four fixed programme days. */
-export type TemplateId = 'lowerA' | 'upperA' | 'lowerB' | 'upperB';
+/**
+ * A programme day's id. Free-form since days became user-defined (Dexie v3);
+ * the seeded upper/lower days keep their original slugs so exports from older
+ * versions still merge cleanly.
+ */
+export type TemplateId = string;
 
 /** Progression family. `conditioning` items (e.g. Row 1 km) only log a time. */
 export type ExerciseType = 'primary' | 'accessory' | 'conditioning';
@@ -27,12 +31,39 @@ export const KG_PER_LB = 0.45359237;
 /** What the `reps` number on a SetLog counts. */
 export type Measure = 'reps' | 'seconds' | 'laps';
 
+/**
+ * One programme day. `tags` replaced the old `lower` / `upper` `kind` field in
+ * v3: lower/upper is derived from them (`isLowerDay` / `isUpperDay` in
+ * `logic/days`), and they are what the clash rule compares.
+ */
 export interface Template {
-  id: TemplateId;
+  id: string;
+  /** The programme this day belongs to. */
+  programmeId: string;
   name: string;
-  kind: 'lower' | 'upper';
-  /** Position in the rotation: 0..3, lowerA → upperA → lowerB → upperB. */
+  tags: SplitTag[];
+  /** Position within its programme's day list. */
   order: number;
+  /** Soft delete: off the rotation and the pickers, history still resolves it. */
+  archived?: boolean;
+}
+
+/** One position in a programme's rotation: a training day, or a rest day. */
+export type RotationSlot = { templateId: string } | { rest: true };
+
+/**
+ * A saved split. Several can exist; exactly one is `active` and drives Today,
+ * the day pickers and the library's "appears in" hints.
+ */
+export interface Programme {
+  id: string;
+  name: string;
+  /** The week (or cycle) shape, walked in order and wrapped around. */
+  rotation: RotationSlot[];
+  active: boolean;
+  createdAt: number;
+  /** Soft delete: hidden from the lists, sessions keep their snapshots. */
+  archived?: boolean;
 }
 
 /** Muscles a catalogue entry can train. Order is the canonical display order. */
@@ -136,7 +167,7 @@ export interface CatalogEntry {
 
 export interface Exercise {
   id: string;
-  templateId: TemplateId;
+  templateId: string;
   name: string;
   /** The catalogue movement this row is an instance of, when it has one. */
   catalogId?: string;
@@ -187,7 +218,13 @@ export type ExerciseSnapshot = Pick<
 
 export interface Session {
   id: string;
-  templateId: TemplateId;
+  templateId: string;
+  /** The day's name as of `startedAt`, so history survives renames/deletes. */
+  templateName?: string;
+  /** The programme the day belonged to when the session started. */
+  programmeId?: string;
+  /** The rotation slot this session was started from, when it came from one. */
+  slotIndex?: number;
   startedAt: number;
   finishedAt?: number;
   notes?: string;
@@ -255,6 +292,8 @@ export interface ExportBundle {
   version: 1;
   exportedAt: number;
   templates: Template[];
+  /** Absent in bundles exported before programmes existed (v2 and earlier). */
+  programmes?: Programme[];
   exercises: Exercise[];
   sessions: Session[];
   setLogs: SetLog[];
@@ -267,6 +306,7 @@ export interface ExportBundle {
 /** Rows inserted per table by `importMerge()`. */
 export interface ImportCounts {
   templates: number;
+  programmes: number;
   exercises: number;
   sessions: number;
   setLogs: number;

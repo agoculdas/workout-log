@@ -3,9 +3,11 @@ import type {
   BodyweightEntry,
   CatalogEntry,
   Exercise,
+  Programme,
   Session,
   SetLog,
   Settings,
+  SplitTag,
   Template,
 } from './types';
 import {
@@ -13,11 +15,14 @@ import {
   SEED_CATALOG,
   SEED_EXERCISES,
   SEED_EXERCISE_TO_CATALOG,
+  SEED_PROGRAMME_ID,
   SEED_TEMPLATES,
+  seedProgramme,
 } from './seed';
 
 export class WorkoutDB extends Dexie {
   templates!: Table<Template, string>;
+  programmes!: Table<Programme, string>;
   exercises!: Table<Exercise, string>;
   sessions!: Table<Session, string>;
   setLogs!: Table<SetLog, string>;
@@ -51,14 +56,30 @@ export class WorkoutDB extends Dexie {
         });
       });
 
+    // v3 — programmes. Days became user-defined rows with split tags instead
+    // of a fixed `kind`, and the rotation moved into a `Programme` row.
+    this.version(3)
+      .stores({
+        templates: 'id, programmeId, [programmeId+order]',
+        programmes: 'id, active',
+      })
+      .upgrade(async (tx) => {
+        await migrateToProgrammes({
+          programmes: tx.table('programmes'),
+          templates: tx.table('templates'),
+          sessions: tx.table('sessions'),
+        });
+      });
+
     this.on('populate', () => {
       void this.seed();
     });
   }
 
-  /** Writes the fixed programme, the catalogue and default settings. */
+  /** Writes the stock programme, its days, the catalogue and default settings. */
   async seed(): Promise<void> {
-    await this.templates.bulkPut(SEED_TEMPLATES);
+    await this.programmes.put(seedProgramme());
+    await this.templates.bulkPut(SEED_TEMPLATES.map((t) => ({ ...t })));
     await this.exercises.bulkPut(SEED_EXERCISES);
     await this.catalog.bulkPut(SEED_CATALOG);
     await this.settings.put({ ...DEFAULT_SETTINGS });
@@ -147,6 +168,101 @@ export async function backfillCatalogLinks(
   return counts;
 }
 
+/* ------------------------------------------------- v2 -> v3: programmes */
+
+/** The three tables `migrateToProgrammes` touches, as a live db or a tx. */
+export interface ProgrammeMigrationTables {
+  programmes: {
+    toArray(): Promise<Programme[]>;
+    get(id: string): Promise<Programme | undefined>;
+    put(row: Programme): Promise<unknown>;
+  };
+  templates: { toArray(): Promise<Template[]>; put(row: Template): Promise<unknown> };
+  sessions: { toArray(): Promise<Session[]>; put(row: Session): Promise<unknown> };
+}
+
+/** What one migration pass changed. All zeros on a second (no-op) run. */
+export interface ProgrammeMigrationCounts {
+  /** 1 when the stock programme row had to be created, 0 when it was there. */
+  programmes: number;
+  /** Templates that gained a `programmeId` / had `kind` converted to `tags`. */
+  templates: number;
+  /** Sessions that gained a `templateName` or a `programmeId` snapshot. */
+  sessions: number;
+}
+
+/** A v2 template row: `kind` instead of `tags`, no `programmeId`. */
+interface LegacyTemplate extends Partial<Template> {
+  id: string;
+  name: string;
+  order: number;
+  kind?: 'lower' | 'upper';
+}
+
+/** `kind: 'lower'` meant legs; `kind: 'upper'` meant everything above them. */
+function tagsFromKind(kind: 'lower' | 'upper' | undefined): SplitTag[] {
+  if (kind === 'lower') return ['lower', 'legs'];
+  if (kind === 'upper') return ['upper'];
+  return [];
+}
+
+/**
+ * Moves the fixed four-day rotation into data: creates the stock `Programme`
+ * row, attaches every orphan template to it with tags derived from the old
+ * `kind` field, and stamps `templateName` / `programmeId` onto existing
+ * sessions so history survives later renames. Rows that already carry the new
+ * fields are left alone, so running this twice is a no-op.
+ */
+export async function migrateToProgrammes(
+  tables: ProgrammeMigrationTables,
+  now = Date.now(),
+): Promise<ProgrammeMigrationCounts> {
+  const counts: ProgrammeMigrationCounts = { programmes: 0, templates: 0, sessions: 0 };
+
+  const existing = await tables.programmes.toArray();
+  if (!existing.some((p) => p.id === SEED_PROGRAMME_ID)) {
+    const anotherIsActive = existing.some((p) => p.active && !p.archived);
+    await tables.programmes.put({ ...seedProgramme(now), active: !anotherIsActive });
+    counts.programmes = 1;
+  }
+
+  const templates = (await tables.templates.toArray()) as unknown as LegacyTemplate[];
+  const migrated: Template[] = [];
+  for (const row of templates) {
+    const needsProgramme = !row.programmeId;
+    const needsTags = !Array.isArray(row.tags);
+    const hasKind = 'kind' in row;
+    const next: Template = {
+      id: row.id,
+      programmeId: row.programmeId ?? SEED_PROGRAMME_ID,
+      name: row.name,
+      tags: needsTags ? tagsFromKind(row.kind) : (row.tags as SplitTag[]),
+      order: row.order,
+      ...(row.archived === undefined ? {} : { archived: row.archived }),
+    };
+    migrated.push(next);
+    if (!needsProgramme && !needsTags && !hasKind) continue;
+    // `kind` is simply not copied across, which is how it gets deleted.
+    await tables.templates.put(next);
+    counts.templates++;
+  }
+
+  const byId = new Map(migrated.map((t) => [t.id, t]));
+  for (const session of await tables.sessions.toArray()) {
+    const template = byId.get(session.templateId);
+    const patch: Partial<Session> = {};
+    if (session.templateName === undefined && template) patch.templateName = template.name;
+    if (session.programmeId === undefined && template) patch.programmeId = template.programmeId;
+    if (!Object.keys(patch).length) continue;
+    // `slotIndex` is deliberately left undefined: old sessions resolve their
+    // position from the first occurrence of their template in the rotation.
+    await tables.sessions.put({ ...session, ...patch });
+    counts.sessions++;
+  }
+
+  return counts;
+}
+
 export const db = new WorkoutDB();
 
 let seedPromise: Promise<void> | null = null;
@@ -159,13 +275,18 @@ let seedPromise: Promise<void> | null = null;
 export function ensureSeeded(database: WorkoutDB = db): Promise<void> {
   if (database === db && seedPromise) return seedPromise;
   const run = (async () => {
-    const [templateCount, exerciseCount, catalogCount, settings] = await Promise.all([
-      database.templates.count(),
-      database.exercises.count(),
-      database.catalog.count(),
-      database.settings.get('settings'),
-    ]);
-    if (templateCount === 0) await database.templates.bulkPut(SEED_TEMPLATES);
+    const [programmeCount, templateCount, exerciseCount, catalogCount, settings] =
+      await Promise.all([
+        database.programmes.count(),
+        database.templates.count(),
+        database.exercises.count(),
+        database.catalog.count(),
+        database.settings.get('settings'),
+      ]);
+    if (programmeCount === 0) await database.programmes.put(seedProgramme());
+    if (templateCount === 0) {
+      await database.templates.bulkPut(SEED_TEMPLATES.map((t) => ({ ...t })));
+    }
     if (exerciseCount === 0) await database.exercises.bulkPut(SEED_EXERCISES);
     if (catalogCount === 0) await database.catalog.bulkPut(SEED_CATALOG);
     if (!settings) await database.settings.put({ ...DEFAULT_SETTINGS });

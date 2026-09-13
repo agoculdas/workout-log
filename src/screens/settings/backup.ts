@@ -54,6 +54,7 @@ export function summariseImport(counts: ImportCounts): string {
   add(counts.exercises, 'exercise', 'exercises');
   add(counts.catalog, 'catalogue entry', 'catalogue entries');
   add(counts.templates, 'day', 'days');
+  add(counts.programmes, 'programme', 'programmes');
   add(counts.bodyweight, 'weigh-in', 'weigh-ins');
   add(counts.settings, 'settings row', 'settings rows');
   const head = parts.length ? `Imported ${parts.join(', ')}` : 'Nothing new to import';

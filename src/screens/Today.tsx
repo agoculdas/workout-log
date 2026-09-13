@@ -5,9 +5,10 @@ import { Button, Card, ConfirmDialog, PageHeader, Sheet } from '../components';
 import {
   deleteSession,
   getActiveSession,
-  getLastCompletedSession,
+  getActiveProgramme,
   getLastSessionSetsForExercise,
   getSessionDetail,
+  listAllTemplates,
   listExercises,
   listSessions,
   listTemplates,
@@ -15,8 +16,9 @@ import {
   startSession,
 } from '../db/repo';
 import { calendarDaysAgo, pickNextSession, type NextSessionPick } from '../logic/nextSession';
+import { dayKindLabel, isLowerDay } from '../logic/days';
 import { formatDate, formatLastSession, formatPrescription } from '../logic/format';
-import type { Exercise, Session, SetLog, Template, TemplateId } from '../db/types';
+import type { Exercise, Programme, Session, SetLog, Template } from '../db/types';
 
 interface ActiveInfo {
   session: Session;
@@ -31,9 +33,15 @@ interface LastInfo {
 }
 
 interface TodayData {
+  programme: Programme | undefined;
   templates: Template[];
   pick: NextSessionPick;
+  /** The day the Start button starts: the pick, or the day after a rest slot. */
   template: Template | undefined;
+  /** The rotation slot that day sits in, stamped onto the session. */
+  slotIndex: number | undefined;
+  /** Rotation slot of each day, so an override keeps walking the rotation. */
+  slotByTemplate: Record<string, number>;
   exercises: Exercise[];
   lastSets: Record<string, SetLog[] | undefined>;
   active: ActiveInfo | undefined;
@@ -63,6 +71,17 @@ function backupAgeLabel(days: number): string {
   return `${weeks} weeks ago`;
 }
 
+/**
+ * "Rest day 2 of 3" when the rotation actually holds a run of rest slots, and
+ * a bare "Rest day" when it does not — which is what a session already logged
+ * today produces, since the next training day belongs to tomorrow.
+ */
+function restLabel(day: number, total: number): string {
+  if (total < 1) return 'Rest day';
+  if (total === 1) return 'Rest day';
+  return `Rest day ${day} of ${total}`;
+}
+
 /** Time of day, for the header subtitle. */
 function greeting(now = new Date()): string {
   const hour = now.getHours();
@@ -83,16 +102,31 @@ export function Today() {
 
   const data = useLiveQuery(async (): Promise<TodayData> => {
     const now = Date.now();
-    const [templates, lastCompleted, active, completed, settings] = await Promise.all([
-      listTemplates(),
-      getLastCompletedSession(),
-      getActiveSession(),
-      listSessions(false),
-      readSettings(),
-    ]);
+    const [programme, templates, allTemplates, active, completed, settings] =
+      await Promise.all([
+        getActiveProgramme().catch(() => undefined),
+        listTemplates(),
+        // Days of every programme, so a session logged under one you are not
+        // running still counts for the clash rule.
+        listAllTemplates(),
+        getActiveSession(),
+        listSessions(false),
+        readSettings(),
+      ]);
+    const lastCompleted = completed[0];
 
-    const pick = pickNextSession(templates, lastCompleted, now);
-    const exercises = await listExercises(pick.templateId);
+    const pick = pickNextSession(programme, allTemplates, completed, now);
+    const targetId = pick.kind === 'train' ? pick.templateId : pick.nextTemplateId;
+    const targetSlot = pick.kind === 'train' ? pick.slotIndex : pick.nextSlotIndex;
+    const exercises = targetId ? await listExercises(targetId) : [];
+
+    const slotByTemplate: Record<string, number> = {};
+    (programme?.rotation ?? []).forEach((slot, index) => {
+      if ('rest' in slot) return;
+      if (slotByTemplate[slot.templateId] === undefined) {
+        slotByTemplate[slot.templateId] = index;
+      }
+    });
 
     const lastSets: Record<string, SetLog[] | undefined> = {};
     await Promise.all(
@@ -106,26 +140,30 @@ export function Today() {
       const detail = await getSessionDetail(active.id);
       activeInfo = {
         session: active,
-        template: templates.find((t) => t.id === active.templateId),
+        template: allTemplates.find((t) => t.id === active.templateId),
         loggedSets: detail?.sets.length ?? 0,
       };
     }
 
-    const lowerSession = completed.find(
-      (s) => templates.find((t) => t.id === s.templateId)?.kind === 'lower',
-    );
+    const lowerSession = completed.find((s) => {
+      const day = allTemplates.find((t) => t.id === s.templateId);
+      return day ? isLowerDay(day) : false;
+    });
 
     return {
+      programme,
       templates,
       pick,
-      template: templates.find((t) => t.id === pick.templateId),
+      template: targetId ? allTemplates.find((t) => t.id === targetId) : undefined,
+      slotIndex: targetSlot,
+      slotByTemplate,
       exercises,
       lastSets,
       active: activeInfo,
       last: lastCompleted
         ? {
             session: lastCompleted,
-            template: templates.find((t) => t.id === lastCompleted.templateId),
+            template: allTemplates.find((t) => t.id === lastCompleted.templateId),
             daysAgo: calendarDaysAgo(lastCompleted.finishedAt ?? lastCompleted.startedAt, now),
           }
         : undefined,
@@ -139,11 +177,11 @@ export function Today() {
     };
   }, []);
 
-  async function start(templateId: TemplateId): Promise<void> {
+  async function start(templateId: string, slotIndex?: number): Promise<void> {
     if (starting) return;
     setStarting(true);
     try {
-      const session = await startSession(templateId);
+      const session = await startSession(templateId, { slotIndex });
       setSheetOpen(false);
       navigate(`/session/${session.id}`);
     } finally {
@@ -169,6 +207,8 @@ export function Today() {
   }
 
   const { active, exercises, last, pick, template } = data;
+  const rest = pick.kind === 'rest' ? pick : undefined;
+  const resting = rest !== undefined;
   const name = template?.name ?? 'Next session';
   /** A lower day trained today or yesterday is the thing we warn about. */
   const lowerRecent = data.lowerDaysAgo !== undefined && data.lowerDaysAgo <= 1;
@@ -214,8 +254,17 @@ export function Today() {
         ) : null}
 
         <Card>
-          <div className="text-[11px] tracking-wide text-muted uppercase">Next session</div>
-          <h2 className="mt-1 text-3xl leading-tight font-bold tracking-tight">{name}</h2>
+          <div className="text-[11px] tracking-wide text-muted uppercase">
+            {resting ? 'Rest day suggested' : 'Next session'}
+          </div>
+          <h2 className="mt-1 text-3xl leading-tight font-bold tracking-tight">
+            {rest ? restLabel(rest.restDay, rest.restTotal) : name}
+          </h2>
+          {rest ? (
+            <p className="mt-2 text-sm text-muted">
+              {template ? `Next up: ${template.name}.` : 'Nothing scheduled after this.'}
+            </p>
+          ) : null}
           {pick.reason ? <p className="mt-2 text-sm text-muted">{pick.reason}</p> : null}
 
           <ul className="mt-4 flex flex-col divide-y divide-border/60">
@@ -237,14 +286,16 @@ export function Today() {
             ) : null}
           </ul>
 
-          <Button
-            full
-            className="mt-4"
-            disabled={starting}
-            onClick={() => void start(pick.templateId)}
-          >
-            Start {name}
-          </Button>
+          {template ? (
+            <Button
+              full
+              className="mt-4"
+              disabled={starting}
+              onClick={() => void start(template.id, data.slotIndex)}
+            >
+              {resting ? `Train anyway: ${name}` : `Start ${name}`}
+            </Button>
+          ) : null}
         </Card>
 
         <div className="flex flex-col items-center gap-2">
@@ -278,16 +329,16 @@ export function Today() {
       <Sheet open={sheetOpen} onClose={() => setSheetOpen(false)} title="Start a session">
         <ul className="flex flex-col gap-1">
           {data.templates.map((t) => {
-            const warn = t.kind === 'lower' && lowerRecent;
+            const warn = isLowerDay(t) && lowerRecent;
             return (
               <li key={t.id}>
                 <button
                   type="button"
                   disabled={starting}
-                  onClick={() => void start(t.id)}
+                  onClick={() => void start(t.id, data.slotByTemplate[t.id])}
                   className={[
                     'flex min-h-14 w-full items-center gap-3 rounded-xl px-3 text-left active:bg-surface-2',
-                    t.id === pick.templateId ? 'bg-surface-2' : '',
+                    t.id === template?.id ? 'bg-surface-2' : '',
                   ].join(' ')}
                 >
                   <span className="min-w-0 flex-1">
@@ -298,12 +349,10 @@ export function Today() {
                         {daysAgoLabel(data.lowerDaysAgo ?? 0)} — back-to-back lower days.
                       </span>
                     ) : (
-                      <span className="block text-xs text-muted">
-                        {t.kind === 'lower' ? 'Lower' : 'Upper'} day
-                      </span>
+                      <span className="block text-xs text-muted">{dayKindLabel(t)} day</span>
                     )}
                   </span>
-                  {t.id === pick.templateId ? (
+                  {t.id === template?.id ? (
                     <span className="shrink-0 text-xs text-accent">suggested</span>
                   ) : null}
                 </button>

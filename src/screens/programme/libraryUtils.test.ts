@@ -36,10 +36,10 @@ function makeEntry(patch: Partial<CatalogEntry> = {}): CatalogEntry {
 }
 
 const TEMPLATES: Template[] = [
-  { id: 'lowerA', name: 'Lower A', kind: 'lower', order: 0 },
-  { id: 'upperA', name: 'Upper A', kind: 'upper', order: 1 },
-  { id: 'lowerB', name: 'Lower B', kind: 'lower', order: 2 },
-  { id: 'upperB', name: 'Upper B', kind: 'upper', order: 3 },
+  { id: 'lowerA', programmeId: 'p1', name: 'Lower A', tags: ['lower', 'legs'], order: 0 },
+  { id: 'upperA', programmeId: 'p1', name: 'Upper A', tags: ['upper'], order: 1 },
+  { id: 'lowerB', programmeId: 'p1', name: 'Lower B', tags: ['lower', 'legs'], order: 2 },
+  { id: 'upperB', programmeId: 'p1', name: 'Upper B', tags: ['upper'], order: 3 },
 ];
 
 describe('muscle strings', () => {

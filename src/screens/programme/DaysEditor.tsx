@@ -11,7 +11,7 @@ import {
   reorderExercises,
   upsertExercise,
 } from '../../db/repo';
-import type { CatalogEntry, Exercise, MassUnit, TemplateId } from '../../db/types';
+import type { CatalogEntry, Exercise, MassUnit } from '../../db/types';
 import { formatPrescription } from '../../logic/format';
 import { defaultIncrement, exerciseMassUnit } from '../../logic/units';
 import ExerciseSheet from './ExerciseSheet';
@@ -99,14 +99,25 @@ function ExerciseRow({ exercise, muscles, first, last, onEdit, onMove }: RowProp
  */
 export function DaysEditor() {
   const templates = useLiveQuery(() => listTemplates(), [], []);
-  const [templateId, setTemplateId] = useState<TemplateId>('lowerA');
+  const [picked, setPicked] = useState<string>('');
+  // Days are user-defined now, so there is no id to hard-code: the selection
+  // falls back to the active programme's first day until one is chosen.
+  const templateId: string =
+    templates.find((t) => t.id === picked)?.id ?? templates[0]?.id ?? '';
 
-  const exercises = useLiveQuery(() => listExercises(templateId), [templateId], []);
+  const exercises = useLiveQuery(
+    () => (templateId ? listExercises(templateId) : Promise.resolve([])),
+    [templateId],
+    [],
+  );
   // Only for a brand-new custom row: everything else keeps its own denomination.
   const settings = useLiveQuery(() => readSettings(), []);
   const defaultMassUnit: MassUnit = settings?.units === 'lb' ? 'lb' : 'kg';
   const archived = useLiveQuery(
-    () => listExercises(templateId, true).then((rows) => rows.filter((e) => e.archived)),
+    () =>
+      templateId
+        ? listExercises(templateId, true).then((rows) => rows.filter((e) => e.archived))
+        : Promise.resolve([]),
     [templateId],
     [],
   );
@@ -240,7 +251,7 @@ export function DaysEditor() {
         <SegmentedControl
           label="Programme day"
           value={templateId}
-          onChange={setTemplateId}
+          onChange={setPicked}
           options={templates.map((t) => ({ value: t.id, label: t.name }))}
         />
       </div>

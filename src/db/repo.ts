@@ -6,7 +6,14 @@
  *   const exercises = useLiveQuery(() => listExercises('lowerA'), ['lowerA']);
  */
 import { db, newId, type WorkoutDB } from './db';
-import { DEFAULT_SETTINGS, SEED_CATALOG, SEED_EXERCISES, SEED_TEMPLATES } from './seed';
+import {
+  DEFAULT_SETTINGS,
+  SEED_CATALOG,
+  SEED_EXERCISES,
+  SEED_TEMPLATES,
+  seedProgramme,
+} from './seed';
+import { getPreset } from './presets';
 import { tallyMuscles } from '../logic/muscleVolume';
 import { formatSetSummary } from '../logic/format';
 import { warmupSets, workingSets } from '../logic/sets';
@@ -26,15 +33,18 @@ import type {
   Muscle,
   MuscleVolumeResult,
   PatternBalance,
+  Programme,
+  RotationSlot,
   Session,
   SetLog,
   Settings,
   SplitTag,
-  TemplateId,
   Template,
 } from './types';
 
 export type { MuscleVolumeResult, MuscleVolumeRow, PatternBalance } from './types';
+export { PRESETS, getPreset } from './presets';
+export type { PresetDay, ProgrammePreset } from './presets';
 
 /* ------------------------------------------------------------------ settings */
 
@@ -97,36 +107,400 @@ async function defaultMassUnit(): Promise<MassUnit> {
   return settings?.units === 'lb' ? 'lb' : 'kg';
 }
 
-/* ----------------------------------------------------------------- templates */
+/* ---------------------------------------------------------------- programmes */
 
-/** The four programme days, in rotation order. */
-export async function listTemplates(): Promise<Template[]> {
-  const rows = await db.templates.toArray();
-  return rows.sort((a, b) => a.order - b.order);
+function byActiveThenAge(a: Programme, b: Programme): number {
+  if (a.active !== b.active) return a.active ? -1 : 1;
+  return a.createdAt - b.createdAt;
 }
 
-export async function getTemplate(id: TemplateId): Promise<Template | undefined> {
+/** Saved programmes: the active one first, then oldest to newest. */
+export async function listProgrammes(includeArchived = false): Promise<Programme[]> {
+  const rows = await db.programmes.toArray();
+  const visible = includeArchived ? rows : rows.filter((p) => !p.archived);
+  return visible.sort(byActiveThenAge);
+}
+
+export async function getProgramme(id: string): Promise<Programme | undefined> {
+  return db.programmes.get(id);
+}
+
+/**
+ * Which programme is in charge, without writing anything - safe inside
+ * `useLiveQuery`, where a write would retrigger the query it lives in. Falls
+ * back to the newest non-archived programme when the flag has gone missing;
+ * `getActiveProgramme` is the one that repairs it.
+ */
+async function resolveActiveProgramme(): Promise<Programme | undefined> {
+  const rows = (await db.programmes.toArray()).filter((p) => !p.archived);
+  if (!rows.length) return undefined;
+  return (
+    rows.find((p) => p.active) ??
+    rows.reduce((newest, row) => (row.createdAt > newest.createdAt ? row : newest))
+  );
+}
+
+/**
+ * The active programme. Self-heals: if nothing is flagged active (an import, a
+ * half-finished delete), the newest non-archived programme is promoted and the
+ * flag written back. Throws only when there is no programme at all.
+ */
+export async function getActiveProgramme(): Promise<Programme> {
+  const found = await resolveActiveProgramme();
+  if (!found) throw new Error('No programme exists.');
+  if (found.active) return found;
+  await setActiveProgramme(found.id);
+  return { ...found, active: true };
+}
+
+/** A new, empty programme: no days, no rotation, not active. */
+export async function createProgramme(name: string): Promise<Programme> {
+  const row: Programme = {
+    id: newId(),
+    name: name.trim() || 'New programme',
+    rotation: [],
+    active: false,
+    createdAt: Date.now(),
+    archived: false,
+  };
+  await db.programmes.put(row);
+  return row;
+}
+
+/**
+ * Rename a programme or rewrite its rotation. Every training slot must name a
+ * non-archived day *of this programme* - a rotation is never allowed to point
+ * at a day that is not there, so `pickNextSession` can trust it.
+ */
+export async function updateProgramme(
+  id: string,
+  patch: Partial<Pick<Programme, 'name' | 'rotation'>>,
+): Promise<void> {
+  await db.transaction('rw', db.programmes, db.templates, async () => {
+    const programme = await db.programmes.get(id);
+    if (!programme) throw new Error(`Unknown programme: ${id}`);
+    const next: Programme = { ...programme };
+    if (patch.name !== undefined) next.name = patch.name.trim() || programme.name;
+    if (patch.rotation !== undefined) {
+      const days = await db.templates.where('programmeId').equals(id).toArray();
+      const usable = new Set(days.filter((t) => !t.archived).map((t) => t.id));
+      for (const slot of patch.rotation) {
+        if ('rest' in slot) continue;
+        if (!usable.has(slot.templateId)) {
+          throw new Error(`Rotation slot names an unknown day: ${slot.templateId}`);
+        }
+      }
+      next.rotation = patch.rotation.map((slot) => ({ ...slot }));
+    }
+    await db.programmes.put(next);
+  });
+}
+
+/** Make one programme active. Exactly one row carries the flag afterwards. */
+export async function setActiveProgramme(id: string): Promise<void> {
+  await db.transaction('rw', db.programmes, async () => {
+    const target = await db.programmes.get(id);
+    if (!target) throw new Error(`Unknown programme: ${id}`);
+    if (target.archived) throw new Error('An archived programme cannot be made active.');
+    for (const row of await db.programmes.toArray()) {
+      const active = row.id === id;
+      if (row.active === active) continue;
+      await db.programmes.put({ ...row, active });
+    }
+  });
+}
+
+/**
+ * A full copy under a new name: every non-archived day and its exercises get
+ * fresh ids, and the rotation is remapped onto them. The copy is not active.
+ */
+export async function duplicateProgramme(id: string, name: string): Promise<Programme> {
+  const source = await db.programmes.get(id);
+  if (!source) throw new Error(`Unknown programme: ${id}`);
+  const days = (await db.templates.where('programmeId').equals(id).toArray())
+    .filter((t) => !t.archived)
+    .sort((a, b) => a.order - b.order);
+
+  const copyId = newId();
+  const idMap = new Map<string, string>();
+  for (const [index, day] of days.entries()) {
+    const templateId = newId();
+    idMap.set(day.id, templateId);
+    await db.templates.put({
+      id: templateId,
+      programmeId: copyId,
+      name: day.name,
+      tags: [...day.tags],
+      order: index,
+      archived: false,
+    });
+    const exercises = (await db.exercises.where('templateId').equals(day.id).toArray())
+      .filter((e) => !e.archived)
+      .sort((a, b) => a.order - b.order);
+    for (const [order, exercise] of exercises.entries()) {
+      await db.exercises.put({ ...exercise, id: newId(), templateId, order });
+    }
+  }
+
+  const rotation: RotationSlot[] = [];
+  for (const slot of source.rotation) {
+    if ('rest' in slot) {
+      rotation.push({ rest: true });
+      continue;
+    }
+    const mapped = idMap.get(slot.templateId);
+    if (mapped) rotation.push({ templateId: mapped });
+  }
+
+  const copy: Programme = {
+    id: copyId,
+    name: name.trim() || `${source.name} copy`,
+    rotation,
+    active: false,
+    createdAt: Date.now(),
+    archived: false,
+  };
+  await db.programmes.put(copy);
+  return copy;
+}
+
+/**
+ * Retire a programme: its days and their exercises are archived and the
+ * programme itself is flagged archived. Nothing is deleted, so finished
+ * sessions keep resolving their snapshots. The active programme is refused -
+ * make another one active first.
+ */
+export async function deleteProgramme(id: string): Promise<void> {
+  const programme = await db.programmes.get(id);
+  if (!programme) throw new Error(`Unknown programme: ${id}`);
+  const active = await resolveActiveProgramme();
+  if (active?.id === id) {
+    throw new Error('The active programme cannot be deleted. Make another one active first.');
+  }
+  await db.transaction('rw', db.programmes, db.templates, db.exercises, async () => {
+    const days = await db.templates.where('programmeId').equals(id).toArray();
+    for (const day of days) {
+      if (!day.archived) await db.templates.put({ ...day, archived: true });
+      const exercises = await db.exercises.where('templateId').equals(day.id).toArray();
+      for (const exercise of exercises) {
+        if (!exercise.archived) await db.exercises.update(exercise.id, { archived: true });
+      }
+    }
+    await db.programmes.put({ ...programme, active: false, archived: true });
+  });
+}
+
+/**
+ * Build a whole programme from one of the `PRESETS`. Each day's exercises come
+ * through `addExerciseFromCatalog`, so the unit, measure, per-side flag,
+ * denomination and increment are the catalogue's and Settings' business - the
+ * preset only says which movement, how many sets, what rep range, and whether
+ * it is a primary.
+ */
+export async function createProgrammeFromPreset(
+  presetId: string,
+  opts: { activate?: boolean } = {},
+): Promise<Programme> {
+  const preset = getPreset(presetId);
+  if (!preset) throw new Error(`Unknown preset: ${presetId}`);
+
+  const programmeId = newId();
+  const templateIds: string[] = [];
+  for (const [index, day] of preset.days.entries()) {
+    const templateId = newId();
+    templateIds.push(templateId);
+    await db.templates.put({
+      id: templateId,
+      programmeId,
+      name: day.name,
+      tags: [...day.tags],
+      order: index,
+      archived: false,
+    });
+    for (const item of day.exercises) {
+      await addExerciseFromCatalog(templateId, item.catalogId, {
+        sets: item.sets,
+        repMin: item.repMin,
+        repMax: item.repMax,
+        type: item.type,
+      });
+    }
+  }
+
+  const rotation: RotationSlot[] = preset.rotation.map((slot) => {
+    if (slot === 'rest') return { rest: true };
+    const templateId = templateIds[slot];
+    return templateId ? { templateId } : { rest: true };
+  });
+
+  const programme: Programme = {
+    id: programmeId,
+    name: preset.name,
+    rotation,
+    active: false,
+    createdAt: Date.now(),
+    archived: false,
+  };
+  await db.programmes.put(programme);
+  if (opts.activate) {
+    await setActiveProgramme(programmeId);
+    return { ...programme, active: true };
+  }
+  return programme;
+}
+
+/* ----------------------------------------------------------------- templates */
+
+/**
+ * A programme's days, in order. With no `programmeId` it is the *active*
+ * programme's days - what Today, the day pickers and the library's "appears
+ * in" hints all mean by "the programme". Archived days are hidden by default.
+ *
+ * A database with no programme row at all (only reachable mid-import) falls
+ * back to every template, so no screen goes blank.
+ */
+export async function listTemplates(
+  programmeId?: string,
+  includeArchived = false,
+): Promise<Template[]> {
+  let id = programmeId;
+  if (id === undefined) id = (await resolveActiveProgramme())?.id;
+  const rows =
+    id === undefined
+      ? await db.templates.toArray()
+      : await db.templates.where('programmeId').equals(id).toArray();
+  const visible = includeArchived ? rows : rows.filter((t) => !t.archived);
+  return visible.sort((a, b) => a.order - b.order);
+}
+
+/**
+ * Every day in the database, whatever programme it belongs to. Used where a
+ * session's day has to resolve regardless of which programme is active - the
+ * clash rule in `pickNextSession` reads tags off days you are not running.
+ */
+export async function listAllTemplates(includeArchived = true): Promise<Template[]> {
+  const rows = await db.templates.toArray();
+  const visible = includeArchived ? rows : rows.filter((t) => !t.archived);
+  return visible.sort((a, b) => a.order - b.order);
+}
+
+export async function getTemplate(id: string): Promise<Template | undefined> {
   return db.templates.get(id);
+}
+
+/** Append a day to a programme. */
+export async function createTemplate(
+  programmeId: string,
+  input: { name: string; tags: SplitTag[] },
+): Promise<Template> {
+  const siblings = await db.templates.where('programmeId').equals(programmeId).toArray();
+  const order = siblings.reduce((max, t) => Math.max(max, t.order + 1), 0);
+  const row: Template = {
+    id: newId(),
+    programmeId,
+    name: input.name.trim() || 'New day',
+    tags: [...new Set(input.tags)],
+    order,
+    archived: false,
+  };
+  await db.templates.put(row);
+  return row;
+}
+
+export async function updateTemplate(
+  id: string,
+  patch: Partial<Pick<Template, 'name' | 'tags'>>,
+): Promise<void> {
+  const row = await db.templates.get(id);
+  if (!row) throw new Error(`Unknown day: ${id}`);
+  const next: Template = { ...row };
+  if (patch.name !== undefined) next.name = patch.name.trim() || row.name;
+  if (patch.tags !== undefined) next.tags = [...new Set(patch.tags)];
+  await db.templates.put(next);
+}
+
+/**
+ * Rewrite `order` for a programme's days from the given id sequence. Ids not
+ * in the list keep their relative order and are appended after.
+ */
+export async function reorderTemplates(
+  programmeId: string,
+  orderedIds: string[],
+): Promise<void> {
+  await db.transaction('rw', db.templates, async () => {
+    const rows = await db.templates.where('programmeId').equals(programmeId).toArray();
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    let order = 0;
+    for (const id of orderedIds) {
+      const row = byId.get(id);
+      if (!row) continue;
+      await db.templates.update(id, { order: order++ });
+      byId.delete(id);
+    }
+    const rest = [...byId.values()].sort((a, b) => a.order - b.order);
+    for (const row of rest) {
+      await db.templates.update(row.id, { order: order++ });
+    }
+  });
+}
+
+/**
+ * Retire a day: it leaves its programme's rotation, its exercises are archived
+ * and it disappears from the pickers. Sessions keep their snapshots, so
+ * history still reads the same.
+ */
+export async function archiveTemplate(id: string): Promise<void> {
+  await db.transaction('rw', db.programmes, db.templates, db.exercises, async () => {
+    const template = await db.templates.get(id);
+    if (!template) return;
+    if (!template.archived) await db.templates.put({ ...template, archived: true });
+
+    const programme = await db.programmes.get(template.programmeId);
+    if (programme) {
+      const rotation = programme.rotation.filter(
+        (slot) => 'rest' in slot || slot.templateId !== id,
+      );
+      if (rotation.length !== programme.rotation.length) {
+        await db.programmes.put({ ...programme, rotation });
+      }
+    }
+
+    for (const exercise of await db.exercises.where('templateId').equals(id).toArray()) {
+      if (!exercise.archived) await db.exercises.update(exercise.id, { archived: true });
+    }
+  });
 }
 
 /* ----------------------------------------------------------------- exercises */
 
 /**
- * Exercises for one template (or all templates when `templateId` is omitted),
- * sorted by `order`. Archived rows are excluded unless `includeArchived`.
+ * Exercises for one day, sorted by `order`. Archived rows are excluded unless
+ * `includeArchived`.
+ *
+ * With no `templateId` it is *the active programme's* exercises - every
+ * non-archived day of it, in rotation order then list order. That is what the
+ * library's "appears in" hints and History's exercise index mean by "the
+ * programme"; days belonging to other (or retired) programmes stay out of it.
  */
 export async function listExercises(
-  templateId?: TemplateId,
+  templateId?: string,
   includeArchived = false,
 ): Promise<Exercise[]> {
-  const rows = templateId
-    ? await db.exercises.where('templateId').equals(templateId).toArray()
-    : await db.exercises.toArray();
-  const visible = includeArchived ? rows : rows.filter((e) => !e.archived);
-  return visible.sort((a, b) =>
-    a.templateId === b.templateId
-      ? a.order - b.order
-      : a.templateId.localeCompare(b.templateId),
+  if (templateId) {
+    const rows = await db.exercises.where('templateId').equals(templateId).toArray();
+    const visible = includeArchived ? rows : rows.filter((e) => !e.archived);
+    return visible.sort((a, b) => a.order - b.order);
+  }
+
+  const days = await listTemplates(undefined, includeArchived);
+  const rank = new Map(days.map((t, i) => [t.id, i]));
+  const rows = await db.exercises.toArray();
+  const visible = rows.filter(
+    (e) => (includeArchived || !e.archived) && rank.has(e.templateId),
+  );
+  return visible.sort(
+    (a, b) =>
+      (rank.get(a.templateId) ?? 0) - (rank.get(b.templateId) ?? 0) || a.order - b.order,
   );
 }
 
@@ -183,7 +557,7 @@ export async function upsertExercise(input: NewExercise): Promise<Exercise> {
  * list keep their relative order and are appended after.
  */
 export async function reorderExercises(
-  templateId: TemplateId,
+  templateId: string,
   orderedIds: string[],
 ): Promise<void> {
   await db.transaction('rw', db.exercises, async () => {
@@ -375,7 +749,7 @@ export type CatalogExerciseOverrides = Partial<
  * Throws when `catalogId` is not in the catalogue.
  */
 export async function addExerciseFromCatalog(
-  templateId: TemplateId,
+  templateId: string,
   catalogId: string,
   overrides: CatalogExerciseOverrides = {},
 ): Promise<Exercise> {
@@ -514,17 +888,50 @@ export function exerciseSnapshot(exercise: Exercise): ExerciseSnapshot {
   };
 }
 
+/** What `startSession` freezes besides the exercises. */
+export interface StartSessionOptions {
+  startedAt?: number;
+  /** The rotation slot this session came from, so the walk can resume at it. */
+  slotIndex?: number;
+}
+
 /**
  * Starts (and persists) a new session. Partial sessions are saved as you go.
- * The template's current exercises are snapshotted into the row, so editing
- * the Programme mid-session cannot reorder or rename what you are logging.
+ *
+ * Everything the session needs to describe itself later is snapshotted here:
+ * the day's exercises (so editing the Programme mid-session cannot reorder or
+ * rename what you are logging), the day's name and programme (so history
+ * survives a rename or a retired day), and the rotation slot it came from.
+ *
+ * The old positional form, `startSession(templateId, startedAt)`, still works.
  */
 export async function startSession(
-  templateId: TemplateId,
-  startedAt = Date.now(),
+  templateId: string,
+  startedAt?: number,
+): Promise<Session>;
+export async function startSession(
+  templateId: string,
+  opts?: StartSessionOptions,
+): Promise<Session>;
+export async function startSession(
+  templateId: string,
+  arg?: number | StartSessionOptions,
 ): Promise<Session> {
-  const exercises = (await listExercises(templateId)).map(exerciseSnapshot);
-  const session: Session = { id: newId(), templateId, startedAt, exercises };
+  const opts: StartSessionOptions = typeof arg === 'number' ? { startedAt: arg } : (arg ?? {});
+  const [template, exerciseRows] = await Promise.all([
+    db.templates.get(templateId),
+    listExercises(templateId),
+  ]);
+  const session: Session = {
+    id: newId(),
+    templateId,
+    startedAt: opts.startedAt ?? Date.now(),
+    exercises: exerciseRows.map(exerciseSnapshot),
+    ...(template ? { templateName: template.name, programmeId: template.programmeId } : {}),
+    ...(opts.slotIndex === undefined || opts.slotIndex < 0
+      ? {}
+      : { slotIndex: opts.slotIndex }),
+  };
   await db.sessions.add(session);
   return session;
 }
@@ -574,7 +981,10 @@ export async function deleteSession(id: string): Promise<void> {
 
 export interface SessionDetail {
   session: Session;
+  /** The live day row, when it still exists. */
   template: Template | undefined;
+  /** The session's own snapshot of the day's name, else the live row's. */
+  templateName: string;
   /**
    * The session's exercises in order: its snapshot when it has one, otherwise
    * the template's live rows — plus any extra exercise that has sets logged.
@@ -594,7 +1004,7 @@ export interface SessionDetail {
 function fromSnapshot(
   snapshot: ExerciseSnapshot,
   live: Exercise | undefined,
-  templateId: TemplateId,
+  templateId: string,
   order: number,
 ): Exercise {
   return {
@@ -646,7 +1056,14 @@ export async function getSessionDetail(id: string): Promise<SessionDetail | unde
   for (const set of sets) {
     (setsByExercise[set.exerciseId] ??= []).push(set);
   }
-  return { session, template, exercises, setsByExercise, sets };
+  return {
+    session,
+    template,
+    templateName: session.templateName ?? template?.name ?? session.templateId,
+    exercises,
+    setsByExercise,
+    sets,
+  };
 }
 
 /** One exercise's line in the finish summary. */
@@ -694,7 +1111,7 @@ export async function getSessionSummary(
 ): Promise<SessionSummary | undefined> {
   const detail = await getSessionDetail(sessionId);
   if (!detail) return undefined;
-  const { session, template, exercises, setsByExercise, sets } = detail;
+  const { session, templateName, exercises, setsByExercise, sets } = detail;
 
   const rows: SessionSummaryExercise[] = [];
   for (const exercise of exercises) {
@@ -731,7 +1148,7 @@ export async function getSessionSummary(
 
   return {
     session,
-    templateName: template?.name ?? session.templateId,
+    templateName,
     durationMs: Math.max(0, (session.finishedAt ?? Date.now()) - session.startedAt),
     setsLogged: workingSets(sets).length,
     warmups: warmupSets(sets).length,
@@ -891,9 +1308,10 @@ export async function deleteBodyweight(id: string): Promise<void> {
 
 /** Everything in the database as a plain JSON-serialisable object. */
 export async function exportAll(): Promise<ExportBundle> {
-  const [templates, exercises, sessions, setLogs, settings, bodyweight, catalog] =
+  const [templates, programmes, exercises, sessions, setLogs, settings, bodyweight, catalog] =
     await Promise.all([
       db.templates.toArray(),
+      db.programmes.toArray(),
       db.exercises.toArray(),
       db.sessions.toArray(),
       db.setLogs.toArray(),
@@ -905,6 +1323,7 @@ export async function exportAll(): Promise<ExportBundle> {
     version: 1,
     exportedAt: Date.now(),
     templates,
+    programmes,
     exercises,
     sessions,
     setLogs,
@@ -936,6 +1355,7 @@ export async function importMerge(json: unknown): Promise<ImportCounts> {
   if (!isObj(json)) throw new Error('Import failed: expected a JSON object.');
   const counts: ImportCounts = {
     templates: 0,
+    programmes: 0,
     exercises: 0,
     sessions: 0,
     setLogs: 0,
@@ -973,10 +1393,15 @@ export async function importMerge(json: unknown): Promise<ImportCounts> {
     }
   }
 
+  // Days arriving without a programme (a v2 bundle) join whichever programme
+  // is active here; their `kind` becomes tags the way the v3 upgrade does it.
+  const fallbackProgrammeId = (await resolveActiveProgramme())?.id;
+
   await db.transaction(
     'rw',
     [
       db.templates,
+      db.programmes,
       db.exercises,
       db.sessions,
       db.setLogs,
@@ -1005,10 +1430,37 @@ export async function importMerge(json: unknown): Promise<ImportCounts> {
           typeof r.defaultMeasure === 'string',
         'catalog',
       );
+      await merge<Programme>(
+        db.programmes,
+        pick('programmes'),
+        (r) => typeof r.name === 'string' && Array.isArray(r.rotation),
+        'programmes',
+      );
       await merge<Template>(
         db.templates,
-        pick('templates'),
-        (r) => typeof r.name === 'string' && typeof r.order === 'number',
+        pick('templates').map((raw) => {
+          if (!isObj(raw)) return raw;
+          const legacy = raw as Record<string, unknown> & { kind?: unknown };
+          const row: Record<string, unknown> = { ...legacy };
+          delete row.kind;
+          if (typeof row.programmeId !== 'string' && fallbackProgrammeId) {
+            row.programmeId = fallbackProgrammeId;
+          }
+          if (!Array.isArray(row.tags)) {
+            row.tags =
+              legacy.kind === 'lower'
+                ? ['lower', 'legs']
+                : legacy.kind === 'upper'
+                  ? ['upper']
+                  : [];
+          }
+          return row;
+        }),
+        (r) =>
+          typeof r.name === 'string' &&
+          typeof r.order === 'number' &&
+          typeof r.programmeId === 'string' &&
+          Array.isArray(r.tags),
         'templates',
       );
       await merge<Exercise>(
@@ -1067,6 +1519,7 @@ export async function wipeAll(database: WorkoutDB = db): Promise<void> {
     'rw',
     [
       database.templates,
+      database.programmes,
       database.exercises,
       database.sessions,
       database.setLogs,
@@ -1077,6 +1530,7 @@ export async function wipeAll(database: WorkoutDB = db): Promise<void> {
     async () => {
       await Promise.all([
         database.templates.clear(),
+        database.programmes.clear(),
         database.exercises.clear(),
         database.sessions.clear(),
         database.setLogs.clear(),
@@ -1084,7 +1538,8 @@ export async function wipeAll(database: WorkoutDB = db): Promise<void> {
         database.bodyweight.clear(),
         database.catalog.clear(),
       ]);
-      await database.templates.bulkPut(SEED_TEMPLATES);
+      await database.programmes.put(seedProgramme());
+      await database.templates.bulkPut(SEED_TEMPLATES.map((t) => ({ ...t })));
       await database.exercises.bulkPut(SEED_EXERCISES);
       await database.catalog.bulkPut(SEED_CATALOG);
       await database.settings.put({ ...DEFAULT_SETTINGS });

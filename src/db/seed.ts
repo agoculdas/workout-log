@@ -1,4 +1,11 @@
-import type { CatalogEntry, Exercise, Settings, Template } from './types';
+import type {
+  CatalogEntry,
+  Exercise,
+  Programme,
+  RotationSlot,
+  Settings,
+  Template,
+} from './types';
 
 /**
  * Seed rows use stable slug ids (not random UUIDs) so that an export from one
@@ -6,12 +13,41 @@ import type { CatalogEntry, Exercise, Settings, Template } from './types';
  * duplicating the whole programme. User-created rows use crypto.randomUUID().
  */
 
+/** The id of the programme the four stock days belong to. Stable forever. */
+export const SEED_PROGRAMME_ID = 'prog_upper_lower';
+
 export const SEED_TEMPLATES: Template[] = [
-  { id: 'lowerA', name: 'Lower A', kind: 'lower', order: 0 },
-  { id: 'upperA', name: 'Upper A', kind: 'upper', order: 1 },
-  { id: 'lowerB', name: 'Lower B', kind: 'lower', order: 2 },
-  { id: 'upperB', name: 'Upper B', kind: 'upper', order: 3 },
+  { id: 'lowerA', programmeId: SEED_PROGRAMME_ID, name: 'Lower A', tags: ['lower', 'legs'], order: 0, archived: false },
+  { id: 'upperA', programmeId: SEED_PROGRAMME_ID, name: 'Upper A', tags: ['upper'], order: 1, archived: false },
+  { id: 'lowerB', programmeId: SEED_PROGRAMME_ID, name: 'Lower B', tags: ['lower', 'legs'], order: 2, archived: false },
+  { id: 'upperB', programmeId: SEED_PROGRAMME_ID, name: 'Upper B', tags: ['upper'], order: 3, archived: false },
 ];
+
+/** Lower A → Upper A → rest → Lower B → Upper B → rest → rest. */
+export const SEED_ROTATION: RotationSlot[] = [
+  { templateId: 'lowerA' },
+  { templateId: 'upperA' },
+  { rest: true },
+  { templateId: 'lowerB' },
+  { templateId: 'upperB' },
+  { rest: true },
+  { rest: true },
+];
+
+/**
+ * The stock programme row. `createdAt` is stamped when it is written, so a
+ * fresh install and a v2 upgrade both get a sensible timestamp.
+ */
+export function seedProgramme(createdAt = Date.now()): Programme {
+  return {
+    id: SEED_PROGRAMME_ID,
+    name: 'Upper / Lower',
+    rotation: SEED_ROTATION.map((slot) => ({ ...slot })),
+    active: true,
+    createdAt,
+    archived: false,
+  };
+}
 
 export const DEFAULT_SETTINGS: Settings = {
   id: 'settings',

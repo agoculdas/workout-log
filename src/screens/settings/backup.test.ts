@@ -10,6 +10,7 @@ import type { ExportBundle, ImportCounts } from '../../db/types';
 
 const emptyCounts: ImportCounts = {
   templates: 0,
+  programmes: 0,
   exercises: 0,
   sessions: 0,
   setLogs: 0,
