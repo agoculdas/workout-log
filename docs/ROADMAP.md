@@ -12,7 +12,9 @@ Shipped and live at https://agoculdas.github.io/workout-log/:
 - **v1.3 (Phase 1, shipped 2026-09-13)** — warm-up sets, to-failure marker, per-exercise kg/lb, plate calculator, finish summary, quiet backup line, sets-per-muscle reference band, library rough edges.
 - **v2.0 (Phase 2, shipped 2026-09-13)** — programmes with rotations and rest days, user-defined days with split tags, several saved programmes with one active, five presets, same-kind clash rule, rest days that elapse per calendar day, Dexie v3 migration.
 
-423 tests. Verified on a real phone up to v1.2.
+- **v2.1 (3.2, shipped 2026-09-13)** — personal records: e1RM, heaviest set, most reps, longest hold, best time, best session volume; PR marks in Session, records in the finish summary, exercise history, and a Records tab in History.
+
+476 tests. Verified on a real phone up to v1.2.
 
 **Effort scale used below.** S = a few files, under an hour of agent time. M = one agent session, a few hundred lines. L = multi-agent build with a schema migration, like the library was.
 
@@ -84,7 +86,7 @@ Low risk, no schema migration except new settings fields. One session of work fo
 - **Screens.** A row of small chips (0 1 2 3 4+) after the done button, optional.
 - **Rules.** Initially display only. Optional later: don't bump load if average RIR was 0.
 
-### 3.2 Personal records — M
+### 3.2 Personal records — M (shipped 2026-09-13)
 - **Why.** Progression is per session; PRs give the long view and a reason to push a set.
 - **Data.** None. Computed from set logs: best e1RM (Epley: load × (1 + reps ÷ 30)), heaviest set, best session volume, per exercise.
 - **Screens.** "PR" badge on the set in Session when it beats the record; PR line in ExerciseHistory header; a PR list in History; PRs in the Finish summary (1.5).
@@ -139,7 +141,7 @@ Low risk, no schema migration except new settings fields. One session of work fo
 
 1. ~~Phase 1~~ shipped.
 2. ~~Phase 2~~ shipped.
-3. **3.2 PRs**, then 3.3 and 3.4 as you feel the need (3.1 RIR was replaced by the to-failure button).
+3. ~~3.2 PRs~~ shipped. Then 3.3 and 3.4 as you feel the need (3.1 RIR was replaced by the to-failure button).
 4. **4.1 supersets** if your programme uses them; the rest of Phase 4 on demand.
 5. **Phase 5** only when a concrete need appears.
 

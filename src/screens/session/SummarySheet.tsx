@@ -1,5 +1,6 @@
 import { Button, Sheet } from '../../components';
 import { formatDuration, formatNumber, formatVolumeKg } from '../../logic/format';
+import { formatRecord } from '../../logic/records';
 import { massLabel } from '../../logic/units';
 import type { SessionSummary } from '../../db/repo';
 
@@ -72,6 +73,30 @@ export function SummarySheet({ summary, onDone }: SummarySheetProps) {
       ) : (
         <p className="mt-4 text-sm text-muted">No sets were logged in this session.</p>
       )}
+
+      {summary.records.length ? (
+        <section className="mt-5">
+          <h3 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted uppercase">
+            Records
+          </h3>
+          <ul className="flex flex-col gap-1">
+            {summary.records.flatMap((row) =>
+              row.kinds.map((kind) => {
+                const entry = row.entries[kind];
+                if (!entry) return null;
+                return (
+                  <li key={`${row.exerciseId}:${kind}`} className="text-sm">
+                    {row.name} <span aria-hidden="true">·</span>{' '}
+                    <span className="text-accent tabular-nums">
+                      {formatRecord(row.exercise, kind, entry)}
+                    </span>
+                  </li>
+                );
+              }),
+            )}
+          </ul>
+        </section>
+      ) : null}
     </Sheet>
   );
 }

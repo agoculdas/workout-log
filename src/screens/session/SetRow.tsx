@@ -20,6 +20,11 @@ export interface SetRowProps {
   toFailure?: boolean;
   /** Small line under the fields — the progression reason on the first set. */
   hint?: string;
+  /**
+   * Plain text for a record this set just beat, e.g. "PR" or "PR · e1RM".
+   * A fact, shown once the set is logged — no badge, no motion, no copy.
+   */
+  record?: string;
   onLoadChange: (value: number | null) => void;
   onRepsChange: (value: number | null) => void;
   onDone: () => void;
@@ -69,6 +74,7 @@ export function SetRow({
   warmup = false,
   toFailure = false,
   hint,
+  record,
   onLoadChange,
   onRepsChange,
   onDone,
@@ -124,8 +130,20 @@ export function SetRow({
         <span className={warmup ? 'text-sm text-muted/70' : 'text-sm text-muted'}>
           {warmup ? 'Warm-up' : isConditioning ? 'Your time' : `Set ${setIndex + 1}`}
         </span>
+        {record ? (
+          <span className="ml-auto text-xs font-medium text-accent">{record}</span>
+        ) : null}
         {!showLoad ? (
-          <span className="ml-auto rounded-lg bg-surface-2 px-2 py-1 text-xs text-muted">{chip}</span>
+          <span
+            className={[
+              record ? '' : 'ml-auto',
+              'rounded-lg bg-surface-2 px-2 py-1 text-xs text-muted',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          >
+            {chip}
+          </span>
         ) : null}
         {onRemove ? (
           <button

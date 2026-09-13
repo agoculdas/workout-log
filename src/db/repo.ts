@@ -16,6 +16,8 @@ import {
 import { getPreset } from './presets';
 import { tallyMuscles } from '../logic/muscleVolume';
 import { formatSetSummary } from '../logic/format';
+import { computeRecords, recordKindsFor } from '../logic/records';
+import type { ExerciseRecords, RecordKind } from '../logic/records';
 import { warmupSets, workingSets } from '../logic/sets';
 import { defaultIncrement, exerciseMassUnit } from '../logic/units';
 import { topSetLoad, totalVolumeKg } from '../logic/volume';
@@ -43,6 +45,7 @@ import type {
 } from './types';
 
 export type { MuscleVolumeResult, MuscleVolumeRow, PatternBalance } from './types';
+export type { ExerciseRecords, RecordEntry, RecordKind } from '../logic/records';
 export { PRESETS, getPreset } from './presets';
 export type { PresetDay, ProgrammePreset } from './presets';
 
@@ -1103,6 +1106,8 @@ export interface SessionSummary {
   volumeKg: number;
   /** One row per exercise that has at least one logged set, in session order. */
   exercises: SessionSummaryExercise[];
+  /** Records this session set, so the finish sheet needs no second call. */
+  records: SessionRecordRow[];
 }
 
 /**
@@ -1159,7 +1164,183 @@ export async function getSessionSummary(
     warmups: warmupSets(sets).length,
     volumeKg: totalVolumeKg(sets),
     exercises: rows,
+    records: await getSessionRecords(sessionId),
   };
+}
+
+/* ------------------------------------------------------------------- records */
+
+/**
+ * Completed sessions only, optionally with one left out — the session you are
+ * logging must not count as its own history, or every set would be measured
+ * against itself.
+ */
+function completedHistory(
+  history: ExerciseSessionHistory[],
+  excludeSessionId?: string,
+): ExerciseSessionHistory[] {
+  return history.filter(
+    (h) => h.session.finishedAt !== undefined && h.session.id !== excludeSessionId,
+  );
+}
+
+/**
+ * Every record one exercise holds. Unfinished sessions never count; pass
+ * `excludeSessionId` (the session in progress) to get the records a set logged
+ * right now would have to beat.
+ */
+export async function getExerciseRecords(
+  exerciseId: string,
+  opts: { excludeSessionId?: string } = {},
+): Promise<ExerciseRecords> {
+  const exercise = await db.exercises.get(exerciseId);
+  if (!exercise) return {};
+  const history = await getExerciseHistory(exerciseId);
+  return computeRecords(exercise, completedHistory(history, opts.excludeSessionId));
+}
+
+/** One exercise's records, with where it sits in your programmes. */
+export interface ExerciseRecordRow {
+  exercise: Exercise;
+  /** The day the exercise belongs to. */
+  templateName: string;
+  /** The programme that day belongs to. */
+  programmeName: string;
+  /** True for the programme you are running. */
+  activeProgramme: boolean;
+  records: ExerciseRecords;
+}
+
+/**
+ * Every exercise that holds a record, across every programme you have kept.
+ * The active programme comes first — its days in rotation order, then any day
+ * off the rotation, then each day's exercises in list order — and the others
+ * follow, grouped by programme. Archived days and exercises are left out, and
+ * so is anything that has never been logged.
+ */
+export async function getAllRecords(): Promise<ExerciseRecordRow[]> {
+  const [programmes, templates, exercises, sessions, sets] = await Promise.all([
+    listProgrammes(),
+    db.templates.toArray(),
+    db.exercises.toArray(),
+    db.sessions.toArray(),
+    db.setLogs.toArray(),
+  ]);
+
+  // exerciseId -> its completed sessions, oldest first.
+  const completed = new Map(
+    sessions.filter((s) => s.finishedAt !== undefined).map((s) => [s.id, s]),
+  );
+  const byExercise = new Map<string, Map<string, SetLog[]>>();
+  for (const set of sets) {
+    if (!completed.has(set.sessionId)) continue;
+    let perSession = byExercise.get(set.exerciseId);
+    if (!perSession) byExercise.set(set.exerciseId, (perSession = new Map()));
+    const list = perSession.get(set.sessionId);
+    if (list) list.push(set);
+    else perSession.set(set.sessionId, [set]);
+  }
+  const historyFor = (exerciseId: string): ExerciseSessionHistory[] => {
+    const perSession = byExercise.get(exerciseId);
+    if (!perSession) return [];
+    const out: ExerciseSessionHistory[] = [];
+    for (const [sessionId, list] of perSession) {
+      const session = completed.get(sessionId);
+      if (session) out.push({ session, sets: [...list].sort((a, b) => a.setIndex - b.setIndex) });
+    }
+    return out.sort((a, b) => a.session.startedAt - b.session.startedAt);
+  };
+
+  const liveTemplates = templates.filter((t) => !t.archived);
+  const liveExercises = exercises.filter((e) => !e.archived);
+  const rows: ExerciseRecordRow[] = [];
+
+  for (const programme of programmes) {
+    const days = liveTemplates.filter((t) => t.programmeId === programme.id);
+    // Rotation order first (a day can appear in it more than once), then any
+    // day that is not on the rotation at all, by its own position.
+    const rank = new Map<string, number>();
+    programme.rotation.forEach((slot, i) => {
+      if ('rest' in slot) return;
+      if (!rank.has(slot.templateId)) rank.set(slot.templateId, i);
+    });
+    const ordered = [...days].sort(
+      (a, b) =>
+        (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+          (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER) || a.order - b.order,
+    );
+
+    for (const day of ordered) {
+      const dayExercises = liveExercises
+        .filter((e) => e.templateId === day.id)
+        .sort((a, b) => a.order - b.order);
+      for (const exercise of dayExercises) {
+        const records = computeRecords(exercise, historyFor(exercise.id));
+        if (!Object.keys(records).length) continue;
+        rows.push({
+          exercise,
+          templateName: day.name,
+          programmeName: programme.name,
+          activeProgramme: programme.active,
+          records,
+        });
+      }
+    }
+  }
+
+  return rows;
+}
+
+/** One exercise's records *set in a given session*. */
+export interface SessionRecordRow {
+  exerciseId: string;
+  /** The name the session recorded, so a later rename never rewrites it. */
+  name: string;
+  /** The exercise as prescribed then — what `formatRecord` reads the units off. */
+  exercise: Exercise;
+  /** Which kinds this session set, in display order. */
+  kinds: RecordKind[];
+  /** The records themselves, keyed by kind. */
+  entries: Partial<ExerciseRecords>;
+}
+
+/**
+ * What this session put in the book: the records it holds that no earlier
+ * session did. Computed by comparing the records *before* it against the
+ * records *including* it — a kind the exercise had no record of before is not
+ * counted, so nothing is claimed on an exercise's first session.
+ */
+export async function getSessionRecords(sessionId: string): Promise<SessionRecordRow[]> {
+  const detail = await getSessionDetail(sessionId);
+  if (!detail) return [];
+
+  const out: SessionRecordRow[] = [];
+  for (const exercise of detail.exercises) {
+    if (!workingSets(detail.setsByExercise[exercise.id] ?? []).length) continue;
+
+    const history = await getExerciseHistory(exercise.id);
+    const before = computeRecords(exercise, completedHistory(history, sessionId));
+    const after = computeRecords(
+      exercise,
+      // This session counts even if it has not been finished yet.
+      history.filter(
+        (h) => h.session.finishedAt !== undefined || h.session.id === sessionId,
+      ),
+    );
+
+    const kinds: RecordKind[] = [];
+    const entries: Partial<ExerciseRecords> = {};
+    for (const kind of recordKindsFor(exercise)) {
+      const now = after[kind];
+      if (!now || !before[kind] || now.sessionId !== sessionId) continue;
+      kinds.push(kind);
+      entries[kind] = now;
+    }
+    if (kinds.length) {
+      out.push({ exerciseId: exercise.id, name: exercise.name, exercise, kinds, entries });
+    }
+  }
+  return out;
 }
 
 /* ---------------------------------------------------------------------- sets */

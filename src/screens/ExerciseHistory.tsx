@@ -13,6 +13,12 @@ import {
   formatPrescription,
   formatSetSummary,
 } from '../logic/format';
+import {
+  RECORD_LABELS,
+  computeRecords,
+  formatRecord,
+  recordKindsFor,
+} from '../logic/records';
 import { isStalled } from '../logic/stall';
 import { exerciseMassUnit, massLabel } from '../logic/units';
 import { TrendChart } from './history/charts';
@@ -117,6 +123,7 @@ export function ExerciseHistory() {
 
       <div className="space-y-3 px-4 pb-4">
         <MuscleLine entry={entry} />
+        <Records exercise={exercise} history={completed} />
         <Charts exercise={exercise} history={completed} />
       </div>
 
@@ -159,6 +166,47 @@ function MuscleLine({ entry }: { entry: CatalogEntry | undefined }) {
         View in library
       </Link>
     </p>
+  );
+}
+
+/* ------------------------------------------------------------------ records */
+
+/**
+ * The best numbers this exercise holds, one line each. Plain facts with the
+ * date they were set — nothing here suggests anything.
+ */
+function Records({
+  exercise,
+  history,
+}: {
+  exercise: Exercise;
+  history: ExerciseSessionHistory[];
+}) {
+  const records = computeRecords(exercise, history);
+  const kinds = recordKindsFor(exercise).filter((kind) => records[kind] !== undefined);
+  if (!kinds.length) return null;
+
+  return (
+    <section>
+      <h2 className="mb-1 text-xs font-semibold tracking-wide text-muted uppercase">
+        Records
+      </h2>
+      <ul className="space-y-1">
+        {kinds.map((kind) => {
+          const entry = records[kind];
+          if (!entry) return null;
+          return (
+            <li key={kind} className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="min-w-0">
+                <span className="text-muted">{RECORD_LABELS[kind]}</span>{' '}
+                <span className="tabular-nums">{formatRecord(exercise, kind, entry)}</span>
+              </span>
+              <span className="shrink-0 text-xs text-muted">{formatDate(entry.at)}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

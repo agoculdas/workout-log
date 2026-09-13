@@ -89,6 +89,13 @@ aeroplane mode.
 - **Backup note.** Today shows one muted line when the last export is more than a fortnight old.
 - **Past sessions are editable.** History → expand a session → expand an exercise to correct or
   delete any set, and edit the session note.
+- **Records.** History → Records lists your best numbers per exercise, and each exercise's own
+  screen repeats them with the date: best estimated 1RM (Epley, sets of 1–12), heaviest set, best
+  session volume, most reps, longest hold, or fastest time, whichever the movement can hold. Loads
+  are compared in the exercise's current denomination, and warm-ups never count.
+- **PRs.** A logged working set that beats one of those reads "PR" beside its number, and the
+  finish summary lists what the session put in the book. Records start from your **second** session
+  of an exercise — a first is a number, not a record — and none of it moves a load suggestion.
 - **Muscle report.** History → Muscles shows weekly sets per muscle over 1, 4 or 8 weeks — 1 per
   primary muscle of the library entry, 0.5 per secondary, averaged over the weeks that trained —
   plus the week-by-week total and the push:pull and squat:hinge ratios. A shaded 10–20 hard-set band

@@ -14,6 +14,7 @@ import {
   finishSession,
   getCatalogEntry,
   getExerciseHistory,
+  getExerciseRecords,
   getLastSessionSetsForExercise,
   getSessionDetail,
   getSessionSummary,
@@ -24,6 +25,7 @@ import {
 } from '../db/repo';
 import { formatLastSession, formatNumber, formatPrescription } from '../logic/format';
 import { suggestLoad } from '../logic/progression';
+import { setBeats, type SetRecordKind } from '../logic/records';
 import { warmupSets, workingSets } from '../logic/sets';
 import { isStalled } from '../logic/stall';
 import { defaultIncrement, exerciseMassUnit, massLabel } from '../logic/units';
@@ -54,6 +56,16 @@ interface Draft {
 /** Conditioning items are a single "log your time" row. */
 function plannedSets(exercise: Exercise): number {
   return exercise.type === 'conditioning' ? 1 : Math.max(1, exercise.sets);
+}
+
+/**
+ * What a logged set says when it beat something: nothing at all, "PR", or
+ * "PR · e1RM" when the estimated 1RM is the only record that moved. A fact on
+ * the row, and the end of it — records never touch a suggestion.
+ */
+function recordNote(kinds: SetRecordKind[]): string | undefined {
+  if (!kinds.length) return undefined;
+  return kinds.length === 1 && kinds[0] === 'e1rm' ? 'PR · e1RM' : 'PR';
 }
 
 /** Working sets logged for an exercise — warm-ups never count towards the plan. */
@@ -141,16 +153,21 @@ export function Session() {
   const exercise = exercises[safeIndex];
   const exerciseId = exercise?.id;
 
-  /** Last session's sets for this exercise + the stall marker. */
+  /**
+   * Last session's sets for this exercise, the stall marker, and the records
+   * as they stood *before* this session — what a set logged now has to beat.
+   */
   const info = useLiveQuery(async () => {
     if (!exerciseId || !id) return undefined;
-    const [lastSets, history] = await Promise.all([
+    const [lastSets, history, records] = await Promise.all([
       getLastSessionSetsForExercise(exerciseId, id),
       getExerciseHistory(exerciseId),
+      getExerciseRecords(exerciseId, { excludeSessionId: id }),
     ]);
     return {
       lastSets,
       stalled: isStalled(history.filter((h) => h.session.id !== id).map((h) => h.sets)),
+      records,
     };
   }, [exerciseId, id]);
 
@@ -549,6 +566,10 @@ export function Session() {
             const dirty =
               stored !== undefined &&
               (stored.load !== (values.load ?? 0) || stored.reps !== (values.reps ?? 0));
+            // Only a set that is actually in the database can hold a record.
+            const record = stored
+              ? recordNote(setBeats(exercise, info?.records ?? {}, stored))
+              : undefined;
             return (
               <SetRow
                 key={`${exercise.id}:${setIndex}`}
@@ -560,6 +581,7 @@ export function Session() {
                 dirty={dirty}
                 toFailure={values.toFailure}
                 hint={setIndex === 0 ? suggestion?.reason : undefined}
+                {...(record ? { record } : {})}
                 onLoadChange={(load) => patchDraft(setIndex, { load })}
                 onRepsChange={(reps) => patchDraft(setIndex, { reps })}
                 onDone={() => void handleDone(setIndex)}

@@ -19,11 +19,16 @@ import { setCount, totalVolumeKg } from '../logic/volume';
 import { BodyweightSection } from './history/Bodyweight';
 import EditSetSheet from './history/EditSetSheet';
 import { MusclesSection } from './history/Muscles';
+import { RecordsSection } from './history/Records';
 import { formatSetLine, orderedSetLines, setLineLabel } from './history/setLine';
 
-type Segment = 'sessions' | 'bodyweight' | 'muscles';
+type Segment = 'sessions' | 'bodyweight' | 'muscles' | 'records';
 
-/** History: completed sessions, a jump list of exercises, and the weight log. */
+/**
+ * History: completed sessions, a jump list of exercises, the weight log, the
+ * muscle report and your records. Four tabs have to fit a 375 px phone, so
+ * bodyweight goes by "Weight" up here.
+ */
 export function History() {
   const [segment, setSegment] = useState<Segment>('sessions');
 
@@ -39,8 +44,9 @@ export function History() {
           {(
             [
               ['sessions', 'Sessions'],
-              ['bodyweight', 'Bodyweight'],
+              ['bodyweight', 'Weight'],
               ['muscles', 'Muscles'],
+              ['records', 'Records'],
             ] as const
           ).map(([value, label]) => (
             <button
@@ -50,7 +56,7 @@ export function History() {
               aria-selected={segment === value}
               onClick={() => setSegment(value)}
               className={[
-                'min-h-11 flex-1 rounded-lg text-sm font-medium transition-colors',
+                'min-h-11 flex-1 rounded-lg px-1 text-sm font-medium transition-colors',
                 segment === value ? 'bg-surface-2 text-fg' : 'text-muted',
               ].join(' ')}
             >
@@ -64,8 +70,10 @@ export function History() {
         <SessionsSection />
       ) : segment === 'bodyweight' ? (
         <BodyweightSection />
-      ) : (
+      ) : segment === 'muscles' ? (
         <MusclesSection />
+      ) : (
+        <RecordsSection />
       )}
     </div>
   );
