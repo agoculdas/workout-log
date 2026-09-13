@@ -9,6 +9,36 @@ export type TemplateId = string;
 export type ExerciseType = 'primary' | 'accessory' | 'conditioning';
 
 /**
+ * How an exercise's load is advanced between sessions.
+ *
+ * - `double`    — add the increment once *every* set hits the top of the range.
+ * - `linear`    — add it once every set clears the *bottom* of the range.
+ * - `none`      — never suggest a change; repeat the last load and track reps.
+ * - `best-time` — conditioning: pre-fill the best time so far, to beat.
+ *
+ * Absent on a row means `double` for primary/accessory and `best-time` for
+ * conditioning — see `exerciseScheme` in `logic/progression`.
+ */
+export type ProgressionScheme = 'double' | 'linear' | 'none' | 'best-time';
+
+/**
+ * A one-off answer to a stall, chosen by hand from the stalled marker. It
+ * replaces the next session's suggestion and nothing else: `finishSession`
+ * clears it from every exercise that logged a working set, so it can never
+ * quietly become the new normal. Deloads are never automatic.
+ */
+export interface ExerciseOverride {
+  /** The load to pre-fill, in the exercise's own denomination. */
+  load: number;
+  /** The reps / seconds / laps target to pre-fill. */
+  reps: number;
+  /** Which button set it: 10% off, or back to the bottom of the range. */
+  kind: 'deload' | 'bottom';
+  /** Epoch ms it was chosen. */
+  setAt: number;
+}
+
+/**
  * How the `load` number on a SetLog should be read.
  * - `kg_side`      — kg per hand / per side (dumbbells, farmer's walk)
  * - `kg_total`     — kg as shown on the machine / total on the bar
@@ -192,6 +222,17 @@ export interface Exercise {
    */
   increment: number;
   type: ExerciseType;
+  /** How the load advances. Absent means the default for `type`. */
+  scheme?: ProgressionScheme;
+  /**
+   * A hand-picked answer to a stall that replaces the next suggestion once.
+   * Never set automatically; cleared the moment the exercise is logged again.
+   */
+  override?: ExerciseOverride;
+  /** Rest timer for this exercise in seconds. Absent means the Settings default. */
+  restOverride?: number;
+  /** A setup reminder, e.g. "Seat 4, handles narrow". Shown in Session. */
+  note?: string;
   /** Soft delete, so old sessions can still resolve the name. */
   archived?: boolean;
 }
@@ -214,6 +255,9 @@ export type ExerciseSnapshot = Pick<
   | 'massUnit'
   | 'type'
   | 'catalogId'
+  | 'scheme'
+  | 'restOverride'
+  | 'note'
 >;
 
 export interface Session {

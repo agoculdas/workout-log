@@ -7,13 +7,16 @@ import { FieldLabel, SelectField, TextField, ToggleRow } from './Field';
 import {
   MASS_UNIT_OPTIONS,
   MEASURE_OPTIONS,
+  SCHEME_HINTS,
   TYPE_OPTIONS,
   UNIT_OPTIONS,
   blankDraft,
   changeMassUnit,
+  coerceScheme,
   draftFromExercise,
   hasDenomination,
   incrementDisabled,
+  schemeOptionsFor,
   validateDraft,
   type ExerciseDraft,
 } from './exerciseForm';
@@ -26,6 +29,8 @@ export interface ExerciseSheetProps {
   libraryEntry?: CatalogEntry | undefined;
   /** Denomination a brand-new exercise starts in (Settings → Units). */
   defaultMassUnit?: MassUnit;
+  /** Settings → Rest timer, shown as the placeholder when there is no override. */
+  defaultRest?: { primary: number; accessory: number };
   onClose: () => void;
   onSave: (draft: ExerciseDraft) => void | Promise<void>;
   onDelete: () => void;
@@ -83,6 +88,7 @@ export function ExerciseSheet({
   exercise,
   libraryEntry,
   defaultMassUnit = 'kg',
+  defaultRest = { primary: 120, accessory: 90 },
   onClose,
   onSave,
   onDelete,
@@ -102,6 +108,8 @@ export function ExerciseSheet({
   const visible = showErrors ? errors : {};
   const noIncrement = incrementDisabled(draft.unit);
   const noun = MEASURE_NOUN[draft.measure];
+  const schemeOptions = schemeOptionsFor(draft.type);
+  const restDefault = draft.type === 'primary' ? defaultRest.primary : defaultRest.accessory;
 
   const patch = (next: Partial<ExerciseDraft>) => setDraft((d) => ({ ...d, ...next }));
 
@@ -250,9 +258,42 @@ export function ExerciseSheet({
           label="Type"
           value={draft.type}
           options={TYPE_OPTIONS}
-          onChange={(type) => patch({ type })}
+          onChange={(type) => patch({ type, scheme: coerceScheme(draft.scheme, type) })}
           hint="Primary lifts progress first; conditioning just logs a time."
         />
+
+        <SelectField
+          label="Progression"
+          value={draft.scheme}
+          options={schemeOptions}
+          onChange={(scheme) => patch({ scheme })}
+          hint={SCHEME_HINTS[draft.scheme]}
+        />
+
+        <NumberField
+          label="Rest"
+          value={draft.restOverride}
+          onChange={(restOverride) => patch({ restOverride })}
+          step={15}
+          min={0}
+          max={900}
+          suffix="s"
+          placeholder={String(restDefault)}
+          hint={`Default ${restDefault} s. Leave empty to use it.`}
+        />
+
+        <div>
+          <FieldLabel htmlFor="exercise-note">Note</FieldLabel>
+          <textarea
+            id="exercise-note"
+            value={draft.note}
+            onChange={(e) => patch({ note: e.target.value })}
+            rows={2}
+            placeholder="Seat 4, handles narrow"
+            className="w-full rounded-xl border border-border bg-surface p-3 text-base text-fg outline-none focus:border-accent"
+          />
+          <p className="mt-1 text-xs text-muted">Shown under the name in Session.</p>
+        </div>
 
         <p className="text-xs text-muted">Changes apply to future sessions only.</p>
 

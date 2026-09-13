@@ -3,6 +3,8 @@ import { makeExercise } from '../../logic/testFixtures';
 import {
   blankDraft,
   changeMassUnit,
+  coerceScheme,
+  schemeOptionsFor,
   draftFromExercise,
   draftToInput,
   hasDenomination,
@@ -86,5 +88,82 @@ describe('switching denomination', () => {
     expect(changeMassUnit({ ...draft, unit: 'band', increment: 0 }, 'lb', false)).toEqual({
       massUnit: 'lb',
     });
+  });
+});
+
+describe('progression scheme on the draft', () => {
+  it('starts a new exercise on double progression', () => {
+    expect(blankDraft().scheme).toBe('double');
+  });
+
+  it('reads the default for the type when the row names none', () => {
+    expect(draftFromExercise(makeExercise({ type: 'primary' })).scheme).toBe('double');
+    expect(draftFromExercise(makeExercise({ type: 'conditioning' })).scheme).toBe('best-time');
+  });
+
+  it('round-trips a stored scheme', () => {
+    const draft = draftFromExercise(makeExercise({ scheme: 'linear' }));
+    expect(draft.scheme).toBe('linear');
+    expect(draftToInput(draft, 'lowerA').scheme).toBe('linear');
+  });
+
+  it('offers best time only to conditioning, and no load schemes there', () => {
+    expect(schemeOptionsFor('primary').map((o) => o.value)).toEqual([
+      'double',
+      'linear',
+      'none',
+    ]);
+    expect(schemeOptionsFor('conditioning').map((o) => o.value)).toEqual(['none', 'best-time']);
+  });
+
+  it('keeps the scheme legal when the type changes under it', () => {
+    expect(coerceScheme('double', 'conditioning')).toBe('best-time');
+    expect(coerceScheme('linear', 'conditioning')).toBe('best-time');
+    expect(coerceScheme('none', 'conditioning')).toBe('none');
+    expect(coerceScheme('best-time', 'primary')).toBe('double');
+    expect(coerceScheme('linear', 'primary')).toBe('linear');
+  });
+
+  it('saves a legal scheme even if the draft went stale', () => {
+    const draft: ExerciseDraft = { ...blankDraft(), scheme: 'best-time', type: 'accessory' };
+    expect(draftToInput(draft, 'lowerA').scheme).toBe('double');
+  });
+});
+
+describe('rest override and note on the draft', () => {
+  it('reads an empty rest and note off a plain exercise', () => {
+    const draft = draftFromExercise(makeExercise());
+    expect(draft.restOverride).toBeNull();
+    expect(draft.note).toBe('');
+  });
+
+  it('round-trips both', () => {
+    const draft = draftFromExercise(
+      makeExercise({ restOverride: 45, note: 'Seat 4, handles narrow' }),
+    );
+    expect(draft).toMatchObject({ restOverride: 45, note: 'Seat 4, handles narrow' });
+    expect(draftToInput(draft, 'lowerA')).toMatchObject({
+      restOverride: 45,
+      note: 'Seat 4, handles narrow',
+    });
+  });
+
+  it('clears them explicitly, so a saved row loses what it had', () => {
+    const draft: ExerciseDraft = { ...blankDraft(), restOverride: null, note: '   ' };
+    const input = draftToInput(draft, 'lowerA');
+    expect(input.restOverride).toBeUndefined();
+    expect(input.note).toBeUndefined();
+    expect('restOverride' in input).toBe(true);
+    expect('note' in input).toBe(true);
+  });
+
+  it('treats a zero rest as "use the default"', () => {
+    const draft: ExerciseDraft = { ...blankDraft(), restOverride: 0 };
+    expect(draftToInput(draft, 'lowerA').restOverride).toBeUndefined();
+  });
+
+  it('rounds a rest to whole seconds and trims the note', () => {
+    const draft: ExerciseDraft = { ...blankDraft(), restOverride: 45.4, note: '  Seat 4  ' };
+    expect(draftToInput(draft, 'lowerA')).toMatchObject({ restOverride: 45, note: 'Seat 4' });
   });
 });

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { suggestLoad, targetReps, setsFromLastSession } from './progression';
+import {
+  deloadLoad,
+  exerciseScheme,
+  setsFromLastSession,
+  suggestLoad,
+  targetReps,
+} from './progression';
 import { makeExercise, makeSets, makeWarmup } from './testFixtures';
 
 describe('targetReps', () => {
@@ -185,5 +191,154 @@ describe('warm-ups and set facts', () => {
     expect(suggestLoad(lb, sets).load).toBe(75);
     expect(suggestLoad(lb, sets).reason).toContain('add 5 lb');
     expect(suggestLoad(ex, makeSets('s2', 70, [10, 10, 10, 10])).reason).toContain('add 5 kg');
+  });
+});
+
+describe('exerciseScheme', () => {
+  it('defaults to double progression for primary and accessory work', () => {
+    expect(exerciseScheme(makeExercise({ type: 'primary' }))).toBe('double');
+    expect(exerciseScheme(makeExercise({ type: 'accessory' }))).toBe('double');
+  });
+
+  it('defaults conditioning to best time', () => {
+    expect(exerciseScheme(makeExercise({ type: 'conditioning' }))).toBe('best-time');
+  });
+
+  it("takes the exercise's own scheme when it has one", () => {
+    expect(exerciseScheme(makeExercise({ scheme: 'linear' }))).toBe('linear');
+    expect(exerciseScheme(makeExercise({ type: 'conditioning', scheme: 'none' }))).toBe('none');
+  });
+});
+
+describe('suggestLoad — linear', () => {
+  const ex = makeExercise({ scheme: 'linear', sets: 4, repMin: 8, repMax: 12, increment: 5 });
+
+  it('adds the increment when every set cleared the bottom of the range', () => {
+    const result = suggestLoad(ex, makeSets('s1', 100, [8, 8, 9, 8]));
+    expect(result).toMatchObject({ load: 105, reps: 8, progressed: true });
+    expect(result.reason).toBe('All 4 sets hit at least 8 — add 5 kg.');
+  });
+
+  it('holds when one set fell under the bottom of the range', () => {
+    const result = suggestLoad(ex, makeSets('s1', 100, [8, 8, 8, 7]));
+    expect(result).toMatchObject({ load: 100, progressed: false });
+    expect(result.reason).toContain('at least 8');
+  });
+
+  it('holds when the planned sets were not all logged', () => {
+    expect(suggestLoad(ex, makeSets('s1', 100, [10, 10, 10]))).toMatchObject({
+      load: 100,
+      progressed: false,
+    });
+  });
+
+  it('holds when the load moved between sets', () => {
+    const drop = [...makeSets('s1', 100, [8, 8]), ...makeSets('s1', 90, [8, 8])];
+    expect(suggestLoad(ex, drop)).toMatchObject({ progressed: false });
+  });
+
+  it('bumps where double progression would not', () => {
+    const sets = makeSets('s1', 100, [8, 8, 8, 8]);
+    expect(suggestLoad(ex, sets).progressed).toBe(true);
+    expect(suggestLoad({ ...ex, scheme: 'double' }, sets).progressed).toBe(false);
+  });
+});
+
+describe('suggestLoad — tracking only', () => {
+  const ex = makeExercise({ scheme: 'none', sets: 3, repMin: 10, repMax: 10, increment: 5 });
+
+  it('repeats the last load however good the session was', () => {
+    const result = suggestLoad(ex, makeSets('s1', 60, [10, 10, 10]));
+    expect(result).toMatchObject({ load: 60, reps: 10, progressed: false });
+    expect(result.reason).toBe('Tracking only.');
+  });
+
+  it('still starts blank with no history', () => {
+    expect(suggestLoad(ex, [])).toMatchObject({ load: 0, progressed: false });
+  });
+});
+
+describe('suggestLoad — best time', () => {
+  const row = makeExercise({
+    type: 'conditioning',
+    measure: 'seconds',
+    unit: 'none',
+    increment: 0,
+    sets: 1,
+    repMin: 0,
+    repMax: 0,
+  });
+
+  it('pre-fills the record when one is passed in', () => {
+    const result = suggestLoad(row, makeSets('s1', 0, [260]), { bestTime: 245 });
+    expect(result).toMatchObject({ load: 0, reps: 245, progressed: false });
+    expect(result.reason).toBe('Best 4:05 — try to beat it.');
+  });
+
+  it('falls back to the last time when no record is passed in', () => {
+    expect(suggestLoad(row, makeSets('s1', 0, [252]))).toMatchObject({
+      reps: 252,
+      reason: 'Beat your last time.',
+    });
+  });
+
+  it('ignores a zero record', () => {
+    expect(suggestLoad(row, makeSets('s1', 0, [252]), { bestTime: 0 }).reps).toBe(252);
+  });
+
+  it('says nothing but the facts with no history at all', () => {
+    expect(suggestLoad(row, undefined, { bestTime: 245 })).toMatchObject({ load: 0, reps: 245 });
+    expect(suggestLoad(row, undefined)).toMatchObject({ load: 0, reps: 0 });
+  });
+});
+
+describe('suggestLoad — stall override', () => {
+  const ex = makeExercise({ sets: 4, repMin: 8, repMax: 10, increment: 5 });
+  const top = makeSets('s1', 100, [10, 10, 10, 10]);
+
+  it('wins over a session that would otherwise have progressed', () => {
+    const override = { load: 90, reps: 8, kind: 'deload' as const, setAt: 1 };
+    const result = suggestLoad({ ...ex, override }, top);
+    expect(result).toMatchObject({ load: 90, reps: 8, progressed: false });
+    expect(result.reason).toBe('Deload — 10% off 100 kg.');
+  });
+
+  it('names the bottom of the range for the other answer', () => {
+    const override = { load: 100, reps: 8, kind: 'bottom' as const, setAt: 1 };
+    expect(suggestLoad({ ...ex, override }, top).reason).toBe(
+      'Back to the bottom of the range at 100 kg.',
+    );
+  });
+
+  it('reads the denomination of the exercise', () => {
+    const lb = makeExercise({ massUnit: 'lb', increment: 5 });
+    const override = { load: 180, reps: 8, kind: 'deload' as const, setAt: 1 };
+    expect(suggestLoad({ ...lb, override }, makeSets('s1', 200, [10])).reason).toContain(
+      '10% off 200 lb',
+    );
+  });
+
+  it('can be passed in explicitly, and beats the stored one', () => {
+    const stored = { load: 90, reps: 8, kind: 'deload' as const, setAt: 1 };
+    const passed = { load: 80, reps: 8, kind: 'deload' as const, setAt: 2 };
+    expect(suggestLoad({ ...ex, override: stored }, top, { override: passed }).load).toBe(80);
+  });
+
+  it('falls back to the override load when there is no history to come off', () => {
+    const override = { load: 90, reps: 8, kind: 'deload' as const, setAt: 1 };
+    expect(suggestLoad({ ...ex, override }, []).reason).toBe('Deload — 10% off 90 kg.');
+  });
+});
+
+describe('deloadLoad', () => {
+  it('takes a tenth off, snapped to the exercise step', () => {
+    expect(deloadLoad({ increment: 5 }, 100)).toBe(90);
+    expect(deloadLoad({ increment: 2.5 }, 65)).toBe(57.5);
+    expect(deloadLoad({ increment: 1 }, 33)).toBe(30);
+  });
+
+  it('falls back to 2.5 when the exercise has no step', () => {
+    expect(deloadLoad({ increment: 0 }, 100)).toBe(90);
+    expect(deloadLoad({ increment: 0 }, 63)).toBe(57.5);
   });
 });

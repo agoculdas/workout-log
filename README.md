@@ -32,7 +32,8 @@ suggested load goes up by that exercise's increment (+5 kg on machines and the b
 hand on dumbbells; bands and bodyweight items just track reps). Each exercise is denominated in kg
 or **lb** on its own — some machines are marked in pounds — and volume totals always convert to
 kilograms. Suggestions are pre-filled, never forced, and two regressing sessions in a row show a
-"stalled" marker: no automatic deloads. Every exercise is editable on the **Programme** tab.
+"stalled" marker — tap it for a deload or a drop to the bottom of the range, never automatic.
+Every exercise is editable on the **Programme** tab, including the scheme its load advances on.
 
 ## The exercise library
 
@@ -81,6 +82,17 @@ aeroplane mode.
   of progression, volume, top sets and the muscle tallies.
 - **To failure.** The **F** button beside the reps field marks a set as taken to failure. It is
   recorded and reported, and it is deliberately inert — set facts never move a suggestion.
+- **Progression schemes.** Each exercise picks how its load advances (Programme → Progression):
+  *double progression* (the default — add the increment once every set hits the top of the range),
+  *linear* (add it once every set clears the bottom), *tracking only* (repeat the last load, no
+  suggestion), or *best time* for conditioning, which pre-fills the fastest time you have logged.
+- **Stall response is yours, and one-off.** After two regressing sessions the "stalled" marker
+  becomes tappable: *Deload 10%*, *Bottom of range*, or *Keep the suggestion*. Nothing is offered
+  unprompted and nothing happens on its own; whichever you pick pre-fills the next session only and
+  is dropped as soon as the exercise is logged again.
+- **Per-exercise rest and notes.** An exercise can carry its own rest time (otherwise the Settings
+  default for its type) and a setup note — "seat 4, handles narrow" — shown under its name in
+  Session.
 - **Plate calculator.** On a barbell exercise loaded as a total, tapping the **kg** suffix shows
   the per-side breakdown against your bar and plates (Settings → Plates), and what is left over
   when the number is unreachable.

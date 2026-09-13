@@ -26,6 +26,7 @@ import type {
   BodyweightEntry,
   CatalogEntry,
   Exercise,
+  ExerciseOverride,
   ExerciseSessionHistory,
   ExerciseSnapshot,
   ExportBundle,
@@ -893,7 +894,40 @@ export function exerciseSnapshot(exercise: Exercise): ExerciseSnapshot {
     massUnit: exerciseMassUnit(exercise),
     type: exercise.type,
     ...(exercise.catalogId ? { catalogId: exercise.catalogId } : {}),
+    // How it was prescribed, not how it is progressing: the stall `override`
+    // is deliberately *not* frozen — it lives on the live row and is cleared
+    // the moment the exercise is logged.
+    ...(exercise.scheme ? { scheme: exercise.scheme } : {}),
+    ...(exercise.restOverride ? { restOverride: exercise.restOverride } : {}),
+    ...(exercise.note ? { note: exercise.note } : {}),
   };
+}
+
+/**
+ * Sets (or clears) the hand-picked stall answer on one exercise. Pass
+ * `undefined` to drop back to the plain suggestion. Nothing calls this on its
+ * own: it is only ever a button in the stall sheet.
+ */
+export async function setExerciseOverride(
+  id: string,
+  override: ExerciseOverride | undefined,
+): Promise<void> {
+  await db.transaction('rw', db.exercises, async () => {
+    const row = await db.exercises.get(id);
+    if (row) await db.exercises.put(withOverride(row, override));
+  });
+}
+
+/**
+ * The row with the override set, or with the key actually gone. A whole-row
+ * `put` rather than an `update` patch: a live query watching the exercises
+ * table sees the write either way, and "no override" stays one shape.
+ */
+function withOverride(row: Exercise, override: ExerciseOverride | undefined): Exercise {
+  const next: Exercise = { ...row };
+  if (override) next.override = override;
+  else delete next.override;
+  return next;
 }
 
 /** What `startSession` freezes besides the exercises. */
@@ -944,10 +978,24 @@ export async function startSession(
   return session;
 }
 
+/**
+ * Stamps the finish time (and the note), then retires every stall override
+ * this session actually used: an exercise with at least one *working* set
+ * logged here has had its answer, so the next session goes back to the plain
+ * suggestion. A deload is a one-off by construction, never a new baseline.
+ */
 export async function finishSession(id: string, notes?: string): Promise<void> {
   const patch: Partial<Session> = { finishedAt: Date.now() };
   if (notes !== undefined) patch.notes = notes;
-  await db.sessions.update(id, patch);
+  await db.transaction('rw', db.sessions, db.setLogs, db.exercises, async () => {
+    await db.sessions.update(id, patch);
+    const sets = await db.setLogs.where('sessionId').equals(id).toArray();
+    const logged = [...new Set(workingSets(sets).map((s) => s.exerciseId))];
+    for (const exerciseId of logged) {
+      const row = await db.exercises.get(exerciseId);
+      if (row?.override) await db.exercises.put(withOverride(row, undefined));
+    }
+  });
 }
 
 export async function updateSession(
@@ -1023,6 +1071,13 @@ function fromSnapshot(
     ...snapshot,
     // A session logged before the catalogue existed falls back to the live row.
     catalogId: snapshot.catalogId ?? live?.catalogId,
+    // Same for the fields added after snapshots existed.
+    scheme: snapshot.scheme ?? live?.scheme,
+    restOverride: snapshot.restOverride ?? live?.restOverride,
+    note: snapshot.note ?? live?.note,
+    // The stall override is current state, never a frozen prescription: it is
+    // read from the live row so choosing one mid-session takes effect at once.
+    override: live?.override,
   };
 }
 

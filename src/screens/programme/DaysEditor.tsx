@@ -439,6 +439,10 @@ export function DaysEditor({ onOpenProgrammes }: DaysEditorProps = {}) {
         exercise={editing}
         libraryEntry={editingEntry}
         defaultMassUnit={defaultMassUnit}
+        defaultRest={{
+          primary: settings?.restPrimary ?? 120,
+          accessory: settings?.restAccessory ?? 90,
+        }}
         onClose={closeSheet}
         onSave={save}
         onDelete={() => setConfirmDelete(true)}

@@ -13,28 +13,32 @@ import {
   deleteSet,
   finishSession,
   getCatalogEntry,
+  getExercise,
   getExerciseHistory,
   getExerciseRecords,
   getLastSessionSetsForExercise,
   getSessionDetail,
   getSessionSummary,
   logSet,
+  setExerciseOverride,
   updateSession,
   updateSet,
   type SessionSummary,
 } from '../db/repo';
 import { formatLastSession, formatNumber, formatPrescription } from '../logic/format';
-import { suggestLoad } from '../logic/progression';
+import { exerciseScheme, suggestLoad } from '../logic/progression';
 import { setBeats, type SetRecordKind } from '../logic/records';
 import { warmupSets, workingSets } from '../logic/sets';
 import { isStalled } from '../logic/stall';
 import { defaultIncrement, exerciseMassUnit, massLabel } from '../logic/units';
+import { topSetLoad } from '../logic/volume';
 import useSettings from '../hooks/useSettings';
 import useRestTimer from '../hooks/useRestTimer';
 import useWakeLock from '../hooks/useWakeLock';
 import PlateSheet from './session/PlateSheet';
 import RestTimerBar from './session/RestTimerBar';
 import SetRow from './session/SetRow';
+import StallSheet from './session/StallSheet';
 import SummarySheet from './session/SummarySheet';
 import { resolveSwipe } from './session/swipe';
 import {
@@ -44,7 +48,7 @@ import {
   warmupRest,
 } from './session/warmup';
 import { notifyRestOver, playRestDoneCue, primeAudio, requestNotifyPermission } from './session/cue';
-import type { Exercise, SetLog } from '../db/types';
+import type { Exercise, ExerciseOverride, SetLog } from '../db/types';
 
 interface Draft {
   load: number | null;
@@ -138,6 +142,8 @@ export function Session() {
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [finishOpen, setFinishOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
+  /** The stall sheet, only ever opened by tapping the marker or the reason. */
+  const [stallOpen, setStallOpen] = useState(false);
   /** Which row opened the plate calculator, by set index. */
   const [platesFor, setPlatesFor] = useState<number | null>(null);
   /** Non-null once Finish succeeded: the summary sheet owns the screen. */
@@ -171,6 +177,16 @@ export function Session() {
     };
   }, [exerciseId, id]);
 
+  /**
+   * The standing stall answer, read from the live programme row rather than
+   * from the session snapshot: it is current state, not a prescription, so
+   * choosing one has to land on the rows straight away.
+   */
+  const override = useLiveQuery(
+    async () => (exerciseId ? ((await getExercise(exerciseId))?.override ?? null) : null),
+    [exerciseId],
+  );
+
   /** The library entry behind this exercise — only the equipment is read. */
   const catalogId = exercise?.catalogId;
   const catalog = useLiveQuery(
@@ -178,9 +194,25 @@ export function Session() {
     [catalogId],
   );
 
-  const suggestion = useMemo(
-    () => (exercise ? suggestLoad(exercise, info?.lastSets) : undefined),
-    [exercise, info?.lastSets],
+  /**
+   * The pre-fill. The best time is a *fact* handed to a conditioning row so it
+   * knows what to beat; the stall override is what you chose by hand. Neither
+   * is inferred from anything you logged.
+   */
+  const suggestion = useMemo(() => {
+    if (!exercise) return undefined;
+    const best = info?.records.bestTime?.value;
+    const wantsTime = exerciseScheme(exercise) === 'best-time';
+    return suggestLoad(exercise, info?.lastSets, {
+      ...(wantsTime && best !== undefined ? { bestTime: best } : {}),
+      ...(override ? { override } : {}),
+    });
+  }, [exercise, info?.lastSets, info?.records, override]);
+
+  /** Heaviest working load of the last session — what a deload comes off. */
+  const lastLoad = useMemo(
+    () => topSetLoad(workingSets(info?.lastSets ?? [])),
+    [info?.lastSets],
   );
 
   if (detail === undefined) {
@@ -320,10 +352,34 @@ export function Session() {
     forgetDraft(setIndex);
 
     if (exercise.type !== 'conditioning') {
-      const rest = exercise.type === 'primary' ? settings.restPrimary : settings.restAccessory;
+      const fallback =
+        exercise.type === 'primary' ? settings.restPrimary : settings.restAccessory;
+      const rest =
+        exercise.restOverride && exercise.restOverride > 0 ? exercise.restOverride : fallback;
       setRestLabel(exercise.name);
       timer.start(warmup ? warmupRest(rest) : rest);
     }
+  }
+
+  /**
+   * Writes (or clears) the hand-picked stall answer and drops the pre-fill of
+   * every row that is not logged yet, so the new numbers land straight away.
+   * Logged rows are left exactly as they are.
+   */
+  async function chooseOverride(override: ExerciseOverride | undefined): Promise<void> {
+    if (!exercise) return;
+    const stored = new Set(loggedSets.map((s) => s.setIndex));
+    setDrafts((prev) => {
+      const next: Record<string, Draft> = {};
+      for (const [key, draft] of Object.entries(prev)) {
+        const at = key.lastIndexOf(':');
+        const sameExercise = key.slice(0, at) === exercise.id;
+        if (sameExercise && !stored.has(Number(key.slice(at + 1)))) continue;
+        next[key] = draft;
+      }
+      return next;
+    });
+    await setExerciseOverride(exercise.id, override);
   }
 
   async function handleUndo(setIndex: number): Promise<void> {
@@ -464,11 +520,27 @@ export function Session() {
                 {exercise.type}
               </span>
               {info?.stalled ? (
-                <span className="rounded bg-danger/15 px-1.5 py-0.5 text-[10px] tracking-wide text-danger uppercase">
-                  stalled
-                </span>
+                // The marker is the way in to the stall sheet, and the only
+                // one — nothing about a deload is offered unprompted. The
+                // pseudo-element gives the small chip a 44px hit area without
+                // pushing the header row apart (same trick as the step dots).
+                <button
+                  type="button"
+                  onClick={() => setStallOpen(true)}
+                  aria-label="Stalled — what to do about it"
+                  className={[
+                    'relative rounded bg-danger/15 px-1.5 py-0.5 text-[10px] tracking-wide',
+                    "text-danger uppercase before:absolute before:-inset-x-2 before:content-['']",
+                    'before:-inset-y-[14px]',
+                  ].join(' ')}
+                >
+                  stalled ›
+                </button>
               ) : null}
             </div>
+            {exercise.note ? (
+              <div className="mt-0.5 text-xs text-muted">{exercise.note}</div>
+            ) : null}
             <div className="text-xs text-muted">{formatLastSession(exercise, info?.lastSets)}</div>
           </div>
 
@@ -519,6 +591,21 @@ export function Session() {
           <div className="mb-3 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-medium text-accent">
             ▲ +{formatNumber(exercise.increment)} {massLabel(exerciseMassUnit(exercise))} suggested
           </div>
+        ) : null}
+
+        {override ? (
+          // The standing answer, and the way back out of it. It replaces the
+          // reason line under the first set so the same sentence is not said
+          // twice.
+          <button
+            type="button"
+            onClick={() => setStallOpen(true)}
+            className="mb-3 flex min-h-11 w-full items-center gap-1 rounded-xl border border-border bg-surface-2/50 px-3 py-2 text-left text-sm text-muted"
+          >
+            <span className="min-w-0 flex-1">{suggestion?.reason}</span>
+            <span aria-hidden="true">·</span>
+            <span className="shrink-0 text-accent underline underline-offset-4">Change</span>
+          </button>
         ) : null}
 
         <div className="flex flex-col gap-3">
@@ -580,7 +667,9 @@ export function Session() {
                 done={stored !== undefined}
                 dirty={dirty}
                 toFailure={values.toFailure}
-                hint={setIndex === 0 ? suggestion?.reason : undefined}
+                hint={
+                  setIndex === 0 && !override ? suggestion?.reason : undefined
+                }
                 {...(record ? { record } : {})}
                 onLoadChange={(load) => patchDraft(setIndex, { load })}
                 onRepsChange={(reps) => patchDraft(setIndex, { reps })}
@@ -675,6 +764,9 @@ export function Session() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-base">{ex.name}</span>
                     <span className="block text-xs text-muted">{formatPrescription(ex)}</span>
+                    {ex.note ? (
+                      <span className="block truncate text-xs text-muted">{ex.note}</span>
+                    ) : null}
                   </span>
                   <span
                     className={[
@@ -690,6 +782,15 @@ export function Session() {
           })}
         </ul>
       </Sheet>
+
+      <StallSheet
+        open={stallOpen}
+        onClose={() => setStallOpen(false)}
+        exercise={exercise}
+        lastLoad={lastLoad}
+        current={override ?? undefined}
+        onChoose={(override) => void chooseOverride(override)}
+      />
 
       <PlateSheet
         open={platesFor !== null}

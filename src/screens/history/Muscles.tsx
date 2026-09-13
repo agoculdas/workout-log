@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Card, Chip } from '../../components';
+import { Button, Card, Chip } from '../../components';
 import {
   getCatalogEntriesByIds,
   getMuscleVolume,
@@ -28,6 +28,7 @@ import {
   type MuscleBarRow,
   type WindowWeeks,
 } from './muscleSeries';
+import ReviewSheet from './ReviewSheet';
 
 /**
  * History → Muscles: how the logged sets landed across the body over the last
@@ -39,6 +40,8 @@ import {
 export function MusclesSection() {
   const [weeks, setWeeks] = useState<WindowWeeks>(4);
   const [showEmpty, setShowEmpty] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const windowLabel = MUSCLE_WINDOWS.find((w) => w.weeks === weeks)?.label ?? 'this window';
 
   const data = useLiveQuery(async () => {
     const now = Date.now();
@@ -101,6 +104,12 @@ export function MusclesSection() {
         <Card className="text-sm text-muted">
           No finished sessions in this window — log one from Today, or widen the window.
         </Card>
+        <div>
+          <Button variant="secondary" full disabled>
+            Review this window
+          </Button>
+          <p className="mt-1 text-xs text-muted">Nothing to review in this window.</p>
+        </div>
       </div>
     );
   }
@@ -172,6 +181,21 @@ export function MusclesSection() {
             ))}
           </div>
         </section>
+      ) : null}
+
+      <Button variant="secondary" full disabled={!band} onClick={() => setReviewOpen(true)}>
+        Review this window
+      </Button>
+
+      {band ? (
+        <ReviewSheet
+          open={reviewOpen}
+          onClose={() => setReviewOpen(false)}
+          rows={rows}
+          target={band}
+          activeWeeks={trained}
+          windowLabel={windowLabel}
+        />
       ) : null}
     </div>
   );

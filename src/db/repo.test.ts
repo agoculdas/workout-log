@@ -24,11 +24,13 @@ import {
   updateSet,
   listSetsForSessionExercise,
   reorderExercises,
+  setExerciseOverride,
   startSession,
   updateSettings,
   upsertExercise,
   wipeAll,
 } from './repo';
+import type { Exercise } from './types';
 
 beforeEach(async () => {
   resetSeedGuard();
@@ -640,6 +642,10 @@ describe('import tolerance for the new optional fields', () => {
           increment: 5,
           type: 'accessory',
           order: 99,
+          scheme: 'linear',
+          restOverride: 45,
+          note: 'Seat 4, handles narrow',
+          override: { load: 85, reps: 8, kind: 'deload', setAt: 5 },
         },
       ],
       sessions: [{ id: 'foreign-1', templateId: 'lowerA', startedAt: 1, finishedAt: 2 }],
@@ -651,7 +657,13 @@ describe('import tolerance for the new optional fields', () => {
     });
 
     expect(counts).toMatchObject({ exercises: 1, sessions: 1, setLogs: 2, skipped: 0 });
-    expect(await db.exercises.get('ex_foreign')).toMatchObject({ massUnit: 'lb' });
+    expect(await db.exercises.get('ex_foreign')).toMatchObject({
+      massUnit: 'lb',
+      scheme: 'linear',
+      restOverride: 45,
+      note: 'Seat 4, handles narrow',
+      override: { load: 85, kind: 'deload' },
+    });
     expect(await db.setLogs.get('fs-warm')).toMatchObject({ kind: 'warmup', massUnit: 'lb' });
     expect(await db.setLogs.get('fs-work')).toMatchObject({ toFailure: true, massUnit: 'lb' });
 
@@ -678,6 +690,109 @@ describe('import tolerance for the new optional fields', () => {
       barWeight: 15,
       plates: [20, 10],
       setsPerMuscleTarget: { min: 8, max: 16 },
+    });
+  });
+});
+
+describe('progression schemes, stall overrides, rest and notes', () => {
+  /** The first exercise of Lower A, with whatever patch the test needs. */
+  async function firstOf(templateId: string, patch: Partial<Exercise> = {}) {
+    const row = (await listExercises(templateId))[0]!;
+    return Object.keys(patch).length ? await upsertExercise({ ...row, ...patch }) : row;
+  }
+
+  it('stores a scheme, a rest override and a note on an exercise', async () => {
+    const row = await firstOf('lowerA', {
+      scheme: 'linear',
+      restOverride: 45,
+      note: 'Seat 4, handles narrow',
+    });
+    expect(await db.exercises.get(row.id)).toMatchObject({
+      scheme: 'linear',
+      restOverride: 45,
+      note: 'Seat 4, handles narrow',
+    });
+  });
+
+  it('setExerciseOverride writes the answer and clears it again', async () => {
+    const row = await firstOf('lowerA');
+    await setExerciseOverride(row.id, { load: 90, reps: 8, kind: 'deload', setAt: 1 });
+    expect((await db.exercises.get(row.id))?.override).toMatchObject({
+      load: 90,
+      kind: 'deload',
+    });
+
+    await setExerciseOverride(row.id, undefined);
+    expect((await db.exercises.get(row.id))?.override).toBeUndefined();
+  });
+
+  it('finishSession clears the override only where a working set was logged', async () => {
+    const [first, second, third] = await listExercises('lowerA');
+    const override = { load: 90, reps: 8, kind: 'deload' as const, setAt: 1 };
+    for (const row of [first!, second!, third!]) await setExerciseOverride(row.id, override);
+
+    const session = await startSession('lowerA');
+    await logSet({
+      sessionId: session.id,
+      exerciseId: first!.id,
+      setIndex: 0,
+      load: 90,
+      reps: 8,
+    });
+    // A warm-up is not an answer to a stall, so it must not clear anything.
+    await logSet({
+      sessionId: session.id,
+      exerciseId: second!.id,
+      setIndex: -1,
+      load: 40,
+      reps: 10,
+      kind: 'warmup',
+    });
+    await finishSession(session.id);
+
+    expect((await db.exercises.get(first!.id))?.override).toBeUndefined();
+    expect((await db.exercises.get(second!.id))?.override).toMatchObject({ load: 90 });
+    expect((await db.exercises.get(third!.id))?.override).toMatchObject({ load: 90 });
+  });
+
+  it('freezes the scheme, rest and note into the session snapshot', async () => {
+    const row = await firstOf('lowerA', {
+      scheme: 'linear',
+      restOverride: 45,
+      note: 'Seat 4',
+    });
+    const session = await startSession('lowerA');
+    const snapshot = session.exercises?.find((e) => e.id === row.id);
+    expect(snapshot).toMatchObject({ scheme: 'linear', restOverride: 45, note: 'Seat 4' });
+
+    // Changing the programme afterwards must not rewrite the session.
+    await upsertExercise({ ...row, scheme: 'none', note: 'Seat 2' });
+    const detail = await getSessionDetail(session.id);
+    expect(detail!.exercises.find((e) => e.id === row.id)).toMatchObject({
+      scheme: 'linear',
+      note: 'Seat 4',
+    });
+  });
+
+  it('leaves the snapshot clean when there is nothing to freeze', async () => {
+    const session = await startSession('lowerA');
+    const snapshot = session.exercises![0]!;
+    expect(snapshot).not.toHaveProperty('scheme');
+    expect(snapshot).not.toHaveProperty('restOverride');
+    expect(snapshot).not.toHaveProperty('note');
+    // The stall override is live state, never frozen.
+    expect(snapshot).not.toHaveProperty('override');
+  });
+
+  it('reads the override from the live row, so it can be chosen mid-session', async () => {
+    const row = await firstOf('lowerA');
+    const session = await startSession('lowerA');
+    expect((await getSessionDetail(session.id))!.exercises[0]!.override).toBeUndefined();
+
+    await setExerciseOverride(row.id, { load: 90, reps: 8, kind: 'bottom', setAt: 1 });
+    expect((await getSessionDetail(session.id))!.exercises[0]!.override).toMatchObject({
+      load: 90,
+      kind: 'bottom',
     });
   });
 });

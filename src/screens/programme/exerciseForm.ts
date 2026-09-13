@@ -9,10 +9,12 @@ import type {
   LoadUnit,
   MassUnit,
   Measure,
+  ProgressionScheme,
   TemplateId,
 } from '../../db/types';
 import type { NewExercise } from '../../db/repo';
 import { formatMassUnit, formatNumber } from '../../logic/format';
+import { exerciseScheme } from '../../logic/progression';
 import { defaultIncrement, exerciseMassUnit, massLabel } from '../../logic/units';
 
 /** Form state. Numbers are nullable so a field can be temporarily empty. */
@@ -30,6 +32,12 @@ export interface ExerciseDraft {
   massUnit: MassUnit;
   increment: number | null;
   type: ExerciseType;
+  /** How the load advances. Always explicit in the form, never absent. */
+  scheme: ProgressionScheme;
+  /** Rest for this exercise in seconds. `null` = use the Settings default. */
+  restOverride: number | null;
+  /** Setup reminder. Empty means none. */
+  note: string;
 }
 
 /**
@@ -65,6 +73,45 @@ export const TYPE_OPTIONS: { value: ExerciseType; label: string }[] = [
   { value: 'accessory', label: 'Accessory' },
   { value: 'conditioning', label: 'Conditioning' },
 ];
+
+export const SCHEME_OPTIONS: { value: ProgressionScheme; label: string }[] = [
+  { value: 'double', label: 'Double progression' },
+  { value: 'linear', label: 'Linear' },
+  { value: 'none', label: 'Tracking only' },
+  { value: 'best-time', label: 'Best time' },
+];
+
+/** One line under the select, saying what the chosen scheme actually does. */
+export const SCHEME_HINTS: Record<ProgressionScheme, string> = {
+  double: 'Adds the increment once every set hits the top of the range.',
+  linear: 'Adds the increment once every set clears the bottom of the range.',
+  none: 'Repeats the last load. No suggestion, just a log.',
+  'best-time': 'Pre-fills your best time, to beat.',
+};
+
+/**
+ * Schemes worth offering for a type: conditioning has no load to advance, so
+ * it chooses between chasing the clock and plain tracking; everything else
+ * has a load, so "best time" is not on the menu.
+ */
+export function schemeOptionsFor(
+  type: ExerciseType,
+): { value: ProgressionScheme; label: string }[] {
+  return SCHEME_OPTIONS.filter((option) =>
+    type === 'conditioning'
+      ? option.value === 'best-time' || option.value === 'none'
+      : option.value !== 'best-time',
+  );
+}
+
+/** Keeps the scheme legal when the type changes under it. */
+export function coerceScheme(
+  scheme: ProgressionScheme,
+  type: ExerciseType,
+): ProgressionScheme {
+  if (type === 'conditioning') return scheme === 'none' ? 'none' : 'best-time';
+  return scheme === 'best-time' ? 'double' : scheme;
+}
 
 /**
  * Short unit tag for a list row, in the row's own denomination: "kg/hand",
@@ -102,6 +149,9 @@ export function blankDraft(massUnit: MassUnit = 'kg'): ExerciseDraft {
     massUnit,
     increment: defaultIncrement('kg_total', massUnit),
     type: 'accessory',
+    scheme: 'double',
+    restOverride: null,
+    note: '',
   };
 }
 
@@ -118,6 +168,9 @@ export function draftFromExercise(exercise: Exercise): ExerciseDraft {
     massUnit: exerciseMassUnit(exercise),
     increment: exercise.increment,
     type: exercise.type,
+    scheme: exerciseScheme(exercise),
+    restOverride: exercise.restOverride ?? null,
+    note: exercise.note ?? '',
   };
 }
 
@@ -191,6 +244,14 @@ export function draftToInput(
     massUnit: draft.massUnit,
     increment: incrementDisabled(draft.unit) ? 0 : (draft.increment ?? 0),
     type: draft.type,
+    scheme: coerceScheme(draft.scheme, draft.type),
+    // Explicit `undefined` rather than an omitted key: `upsertExercise` merges
+    // over the stored row, so a cleared field has to say so to be cleared.
+    restOverride:
+      draft.restOverride !== null && draft.restOverride > 0
+        ? Math.round(draft.restOverride)
+        : undefined,
+    note: draft.note.trim() ? draft.note.trim() : undefined,
     archived: false,
   };
 }
