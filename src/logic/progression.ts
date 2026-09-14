@@ -86,9 +86,10 @@ function formatKg(n: number): string {
 /**
  * The progression rule, per the exercise's scheme (see `exerciseScheme`).
  *
- * - A standing stall `override` wins over everything: it is what you chose by
- *   hand, and it never counts as progress.
- * - No history: blank load (0) and the rep target.
+ * - A standing `override` wins over everything: it is what you chose by hand,
+ *   and it never counts as progress.
+ * - No history: the exercise's `startLoad` when the programme names one,
+ *   otherwise a blank load (0). Either way, the rep target.
  * - `double` (the default): if the last logged session covered every planned
  *   set and each one hit the *top* of the rep range at one load, suggest last
  *   load + increment. Otherwise repeat.
@@ -116,13 +117,20 @@ export function suggestLoad(
   const override = opts?.override ?? exercise.override;
   if (override) {
     const off = lastLoad > 0 ? lastLoad : override.load;
+    const reason = () => {
+      switch (override.kind) {
+        case 'deload':
+          return `Deload — 10% off ${formatKg(off)} ${label}.`;
+        case 'bottom':
+          return `Back to the bottom of the range at ${formatKg(override.load)} ${label}.`;
+        case 'manual':
+          return `Set in Programme — ${formatKg(override.load)} ${label}.`;
+      }
+    };
     return {
       load: override.load,
       reps: override.reps,
-      reason:
-        override.kind === 'deload'
-          ? `Deload — 10% off ${formatKg(off)} ${label}.`
-          : `Back to the bottom of the range at ${formatKg(override.load)} ${label}.`,
+      reason: reason(),
       progressed: false,
     };
   }
@@ -151,6 +159,18 @@ export function suggestLoad(
   const target = exercise.type === 'conditioning' ? lastReps : targetReps(exercise);
 
   if (sets.length === 0) {
+    // What the programme says you start on. A number you typed is a decision,
+    // so it pre-fills; once a session has been logged the history speaks and
+    // this is never read again.
+    const start = exercise.startLoad;
+    if (exercise.type !== 'conditioning' && start !== undefined && start > 0) {
+      return {
+        load: start,
+        reps: target,
+        reason: 'Starting load from your programme.',
+        progressed: false,
+      };
+    }
     return {
       load: 0,
       reps: target,

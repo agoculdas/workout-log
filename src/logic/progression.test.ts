@@ -330,6 +330,60 @@ describe('suggestLoad — stall override', () => {
   });
 });
 
+describe('suggestLoad — load set in the programme', () => {
+  const ex = makeExercise({ sets: 4, repMin: 8, repMax: 10, increment: 5 });
+
+  it('pre-fills the starting load when there is no history', () => {
+    const result = suggestLoad({ ...ex, startLoad: 80 }, undefined);
+    expect(result).toMatchObject({ load: 80, reps: 8, progressed: false });
+    expect(result.reason).toBe('Starting load from your programme.');
+    expect(suggestLoad({ ...ex, startLoad: 80 }, [])).toMatchObject({ load: 80 });
+  });
+
+  it('is never read once a session has been logged', () => {
+    const logged = suggestLoad({ ...ex, startLoad: 80 }, makeSets('s1', 70, [10, 10, 10, 10]));
+    expect(logged.load).toBe(75);
+    expect(logged.progressed).toBe(true);
+  });
+
+  it('applies on the tracking-only scheme too', () => {
+    const row = { ...ex, scheme: 'none' as const, startLoad: 60 };
+    expect(suggestLoad(row, undefined)).toMatchObject({
+      load: 60,
+      reason: 'Starting load from your programme.',
+    });
+  });
+
+  it('stays out of the way of conditioning, which has no load', () => {
+    const row = makeExercise({ type: 'conditioning', unit: 'none', startLoad: 60 });
+    expect(suggestLoad(row, undefined).load).toBe(0);
+    expect(suggestLoad({ ...row, scheme: 'none' }, undefined).load).toBe(0);
+  });
+
+  it('is beaten by a standing override, and ignored when 0', () => {
+    const override = { load: 70, reps: 8, kind: 'manual' as const, setAt: 1 };
+    expect(suggestLoad({ ...ex, startLoad: 80, override }, undefined).load).toBe(70);
+    expect(suggestLoad({ ...ex, startLoad: 0 }, undefined).reason).toBe(
+      'No history yet — enter what you lift.',
+    );
+  });
+
+  it('names the Programme when a hand-set load is standing', () => {
+    const override = { load: 82.5, reps: 8, kind: 'manual' as const, setAt: 1 };
+    const result = suggestLoad({ ...ex, override }, makeSets('s1', 80, [10, 10, 10, 10]));
+    expect(result).toMatchObject({ load: 82.5, reps: 8, progressed: false });
+    expect(result.reason).toBe('Set in Programme — 82.5 kg.');
+  });
+
+  it('reads the exercise denomination in that reason', () => {
+    const lb = makeExercise({ massUnit: 'lb', increment: 5 });
+    const override = { load: 180, reps: 8, kind: 'manual' as const, setAt: 1 };
+    expect(suggestLoad({ ...lb, override }, undefined).reason).toBe(
+      'Set in Programme — 180 lb.',
+    );
+  });
+});
+
 describe('deloadLoad', () => {
   it('takes a tenth off, snapped to the exercise step', () => {
     expect(deloadLoad({ increment: 5 }, 100)).toBe(90);

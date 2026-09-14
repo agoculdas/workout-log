@@ -31,6 +31,12 @@ export interface ExerciseDraft {
   /** The denomination the load and the increment are read in. */
   massUnit: MassUnit;
   increment: number | null;
+  /**
+   * What you lift. Before there is history it is the exercise's `startLoad`;
+   * after it, the load the next session pre-fills (see `setExerciseLoad`).
+   * `null` = nothing set. Meaningless for the units `loadDisabled` names.
+   */
+  load: number | null;
   type: ExerciseType;
   /** How the load advances. Always explicit in the form, never absent. */
   scheme: ProgressionScheme;
@@ -126,6 +132,15 @@ export function incrementDisabled(unit: LoadUnit): boolean {
   return unit === 'band' || unit === 'bodyweight' || unit === 'none';
 }
 
+/**
+ * Whether this row has a load worth naming in the programme. Bands, bodyweight
+ * and conditioning carry no number you could pre-fill, so the Load field stays
+ * off the sheet for them rather than showing a 0 nobody can use.
+ */
+export function loadApplies(draft: Pick<ExerciseDraft, 'unit' | 'type'>): boolean {
+  return !incrementDisabled(draft.unit) && draft.type !== 'conditioning';
+}
+
 /** "+5 lb" / "+2.5 kg" / "—" for a list row. */
 export function incrementLabel(exercise: Exercise): string {
   if (incrementDisabled(exercise.unit) || !exercise.increment) return '—';
@@ -148,6 +163,7 @@ export function blankDraft(massUnit: MassUnit = 'kg'): ExerciseDraft {
     unit: 'kg_total',
     massUnit,
     increment: defaultIncrement('kg_total', massUnit),
+    load: null,
     type: 'accessory',
     scheme: 'double',
     restOverride: null,
@@ -155,7 +171,15 @@ export function blankDraft(massUnit: MassUnit = 'kg'): ExerciseDraft {
   };
 }
 
-export function draftFromExercise(exercise: Exercise): ExerciseDraft {
+/**
+ * Seed the form from a stored row. `load` comes from the caller rather than
+ * the row: what the field should show is the *next session's* load, which the
+ * exercise alone cannot answer (see `getExerciseLoadState`).
+ */
+export function draftFromExercise(
+  exercise: Exercise,
+  load: number | null = exercise.startLoad ?? null,
+): ExerciseDraft {
   return {
     name: exercise.name,
     sets: exercise.sets,
@@ -167,6 +191,7 @@ export function draftFromExercise(exercise: Exercise): ExerciseDraft {
     unit: exercise.unit,
     massUnit: exerciseMassUnit(exercise),
     increment: exercise.increment,
+    load,
     type: exercise.type,
     scheme: exerciseScheme(exercise),
     restOverride: exercise.restOverride ?? null,
@@ -223,7 +248,14 @@ export function validateDraft(draft: ExerciseDraft): DraftErrors {
   return errors;
 }
 
-/** Ready to hand to `upsertExercise`. Call only on a valid draft. */
+/**
+ * Ready to hand to `upsertExercise`. Call only on a valid draft.
+ *
+ * The load is written as `startLoad` only when *creating*: on an existing row
+ * it is `setExerciseLoad` that decides whether the number is a starting load or
+ * an override, so the key is left out of the patch entirely and the stored
+ * value is not touched here.
+ */
 export function draftToInput(
   draft: ExerciseDraft,
   templateId: TemplateId,
@@ -245,6 +277,9 @@ export function draftToInput(
     increment: incrementDisabled(draft.unit) ? 0 : (draft.increment ?? 0),
     type: draft.type,
     scheme: coerceScheme(draft.scheme, draft.type),
+    ...(id
+      ? {}
+      : { startLoad: loadApplies(draft) ? (draft.load ?? undefined) : undefined }),
     // Explicit `undefined` rather than an omitted key: `upsertExercise` merges
     // over the stored row, so a cleared field has to say so to be cleared.
     restOverride:

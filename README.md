@@ -32,6 +32,14 @@ schemes* below for the other three rules. Each exercise is denominated in kg or 
 and volume totals always convert to kilograms. Suggestions are pre-filled, never forced. Every
 exercise is editable on the **Programme** tab, scheme, rest and setup note included.
 
+- **Set the load in the programme, not only mid-session.** Every loaded exercise has a **Load**
+  field in its Programme sheet. Before it has any history that is the *starting load* — what the
+  first session pre-fills ("Starting load from your programme"). Afterwards the field shows what
+  the next session starts on, and typing a different number is a one-off for that session, exactly
+  like a deload: it reads "Set in Programme — 82.5 kg" on the set row and is dropped the moment the
+  exercise is logged. *Use suggestion* puts the rule's number back. The day's list shows the load
+  after the prescription: "4 × 8–10 · 85 kg · +5 kg".
+
 ## The exercise library
 
 *Library*, beside *Days* on the **Programme** tab, is the catalogue behind every exercise: what
@@ -51,7 +59,7 @@ is a `HashRouter`, so URLs look like `#/`, `#/history`, `#/programme` and work f
 npm install
 npm run dev      # http://localhost:5173
 npm run build    # tsc --noEmit && vite build -> dist/
-npm test         # Vitest, single run — 599 of them
+npm test         # Vitest, single run — 625 of them
 ```
 
 Also: `npm run preview`, `test:watch`, `typecheck`, `lint`, `gen:icons`.

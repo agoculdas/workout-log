@@ -7,22 +7,31 @@ import {
   archiveTemplate,
   createTemplate,
   getCatalogEntriesByIds,
+  getLoadStates,
   listExercises,
   listTemplates,
   readActiveProgramme,
   readSettings,
   reorderExercises,
   reorderTemplates,
+  setExerciseLoad,
   updateTemplate,
   upsertExercise,
 } from '../../db/repo';
+import type { ExerciseLoadState } from '../../db/repo';
 import type { CatalogEntry, Exercise, MassUnit, SplitTag } from '../../db/types';
-import { formatPrescription } from '../../logic/format';
+import { formatLoad, formatPrescription } from '../../logic/format';
 import { defaultIncrement, exerciseMassUnit } from '../../logic/units';
 import DaySheet from './DaySheet';
 import ExerciseSheet from './ExerciseSheet';
 import LibraryPickerSheet from './LibraryPickerSheet';
-import { draftToInput, incrementLabel, unitLabel, type ExerciseDraft } from './exerciseForm';
+import {
+  draftToInput,
+  incrementLabel,
+  loadApplies,
+  unitLabel,
+  type ExerciseDraft,
+} from './exerciseForm';
 import { muscleList, swapOverrides } from './libraryUtils';
 
 /** Sentinel for the trailing "+" tab — never a real day id. */
@@ -41,13 +50,15 @@ interface RowProps {
   exercise: Exercise;
   /** "Quads, glutes" from the linked library entry, when there is one. */
   muscles: string;
+  /** What the next session pre-fills, when there is a number to show. */
+  load: number | undefined;
   first: boolean;
   last: boolean;
   onEdit: () => void;
   onMove: (direction: -1 | 1) => void;
 }
 
-function ExerciseRow({ exercise, muscles, first, last, onEdit, onMove }: RowProps) {
+function ExerciseRow({ exercise, muscles, load, first, last, onEdit, onMove }: RowProps) {
   return (
     <li className="flex items-stretch gap-2 border-b border-border/60 last:border-b-0">
       <button
@@ -69,7 +80,13 @@ function ExerciseRow({ exercise, muscles, first, last, onEdit, onMove }: RowProp
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted">
           <span>{formatPrescription(exercise)}</span>
           <span aria-hidden="true">·</span>
-          <span>{unitLabel(exercise.unit, exerciseMassUnit(exercise))}</span>
+          {/* The load carries its own suffix, so it stands in for the bare
+              unit tag rather than repeating it. */}
+          <span>
+            {load === undefined
+              ? unitLabel(exercise.unit, exerciseMassUnit(exercise))
+              : formatLoad(exercise, load)}
+          </span>
           <span aria-hidden="true">·</span>
           <span>{incrementLabel(exercise)}</span>
         </div>
@@ -150,6 +167,15 @@ export function DaysEditor({ onOpenProgrammes }: DaysEditorProps = {}) {
     new Map<string, CatalogEntry>(),
   );
 
+  // Likewise one batched read for every row's load — and the Load field in the
+  // sheet, which opens on a row this map already answers for.
+  const exerciseIds = exercises.map((e) => e.id);
+  const loadStates = useLiveQuery(
+    () => getLoadStates(exerciseIds),
+    [exerciseIds.join(',')],
+    new Map<string, ExerciseLoadState>(),
+  );
+
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetSeq, setSheetSeq] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -208,6 +234,7 @@ export function DaysEditor({ onOpenProgrammes }: DaysEditorProps = {}) {
       exercises.find((e) => e.id === editingId)
     : undefined;
   const editingEntry = editing?.catalogId ? entriesById.get(editing.catalogId) : undefined;
+  const editingLoad = editingId ? loadStates.get(editingId) : undefined;
 
   const openSheet = (id: string | null) => {
     setEditingId(id);
@@ -232,7 +259,14 @@ export function DaysEditor({ onOpenProgrammes }: DaysEditorProps = {}) {
   };
 
   const save = async (draft: ExerciseDraft) => {
-    await upsertExercise(draftToInput(draft, templateId, editing?.id));
+    const saved = await upsertExercise(draftToInput(draft, templateId, editing?.id));
+    // A new row takes its load through `draftToInput` (it can only be a
+    // starting load). On an existing one only a *changed* field writes, so
+    // opening and saving the sheet never quietly rewrites a standing answer.
+    const before = editingLoad?.current ?? editing?.startLoad ?? null;
+    if (editing && loadApplies(draft) && draft.load !== before) {
+      await setExerciseLoad(saved.id, draft.load ?? undefined);
+    }
     closeSheet();
   };
 
@@ -376,6 +410,7 @@ export function DaysEditor({ onOpenProgrammes }: DaysEditorProps = {}) {
                 key={exercise.id}
                 exercise={exercise}
                 muscles={entry ? muscleList(entry.primary) : ''}
+                load={loadStates.get(exercise.id)?.current}
                 first={index === 0}
                 last={index === exercises.length - 1}
                 onEdit={() => openSheet(exercise.id)}
@@ -438,6 +473,7 @@ export function DaysEditor({ onOpenProgrammes }: DaysEditorProps = {}) {
         open={sheetOpen}
         exercise={editing}
         libraryEntry={editingEntry}
+        loadState={editingLoad}
         defaultMassUnit={defaultMassUnit}
         defaultRest={{
           primary: settings?.restPrimary ?? 120,

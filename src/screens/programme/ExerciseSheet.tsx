@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, NumberField, SegmentedControl, Sheet } from '../../components';
+import type { ExerciseLoadState } from '../../db/repo';
 import type { CatalogEntry, Exercise, MassUnit } from '../../db/types';
-import { massLabel } from '../../logic/units';
+import { formatMassUnit, formatNumber } from '../../logic/format';
+import { defaultIncrement, massLabel } from '../../logic/units';
 import { FieldLabel, SelectField, TextField, ToggleRow } from './Field';
 import {
   MASS_UNIT_OPTIONS,
@@ -16,6 +18,7 @@ import {
   draftFromExercise,
   hasDenomination,
   incrementDisabled,
+  loadApplies,
   schemeOptionsFor,
   validateDraft,
   type ExerciseDraft,
@@ -27,6 +30,11 @@ export interface ExerciseSheetProps {
   exercise: Exercise | undefined;
   /** The library entry `exercise.catalogId` resolves to, when it has one. */
   libraryEntry?: CatalogEntry | undefined;
+  /**
+   * What this exercise pre-fills next time and where it comes from — seeds the
+   * Load field and its hint. Absent for a new row: there is nothing to know yet.
+   */
+  loadState?: ExerciseLoadState | undefined;
   /** Denomination a brand-new exercise starts in (Settings → Units). */
   defaultMassUnit?: MassUnit;
   /** Settings → Rest timer, shown as the placeholder when there is no override. */
@@ -87,6 +95,7 @@ export function ExerciseSheet({
   open,
   exercise,
   libraryEntry,
+  loadState,
   defaultMassUnit = 'kg',
   defaultRest = { primary: 120, accessory: 90 },
   onClose,
@@ -98,7 +107,9 @@ export function ExerciseSheet({
   // The parent remounts this sheet per target (see its `key`), so the draft is
   // seeded once and never fights a live query refresh while you type.
   const [draft, setDraft] = useState<ExerciseDraft>(() =>
-    exercise ? draftFromExercise(exercise) : blankDraft(defaultMassUnit),
+    exercise
+      ? draftFromExercise(exercise, loadState?.current ?? exercise.startLoad ?? null)
+      : blankDraft(defaultMassUnit),
   );
   const [showErrors, setShowErrors] = useState(false);
   // Once you have typed your own step, switching kg/lb leaves it alone.
@@ -110,6 +121,30 @@ export function ExerciseSheet({
   const noun = MEASURE_NOUN[draft.measure];
   const schemeOptions = schemeOptionsFor(draft.type);
   const restDefault = draft.type === 'primary' ? defaultRest.primary : defaultRest.accessory;
+
+  // The Load field. Which number it holds is `getExerciseLoadState`'s call:
+  // before there is history it is what the first session starts on, after it
+  // the load the next session pre-fills.
+  const showLoad = loadApplies(draft);
+  const loadSuffix = formatMassUnit({ unit: draft.unit, massUnit: draft.massUnit });
+  const loadStep =
+    draft.increment && draft.increment > 0
+      ? draft.increment
+      : defaultIncrement(draft.unit, draft.massUnit) || 2.5;
+  const hasHistory = loadState?.hasHistory ?? false;
+  // Only while the field still holds the override — tapping "Use suggestion"
+  // puts the plain number back, and the line should say so before you save.
+  const overrideStanding =
+    loadState?.source === 'override' && draft.load === (loadState.current ?? null);
+  const lastLine =
+    loadState?.lastLoad === undefined
+      ? ''
+      : ` Last session: ${formatNumber(loadState.lastLoad)} ${loadSuffix}.`;
+  const loadHint = !hasHistory
+    ? 'Pre-fills your first session.'
+    : overrideStanding
+      ? `Set in Programme.${lastLine}`
+      : `Next session starts here.${lastLine}`;
 
   const patch = (next: Partial<ExerciseDraft>) => setDraft((d) => ({ ...d, ...next }));
 
@@ -193,6 +228,29 @@ export function ExerciseSheet({
           </div>
           {visible.reps ? <p className="mt-1 text-xs text-danger">{visible.reps}</p> : null}
         </div>
+
+        {showLoad ? (
+          <div>
+            <NumberField
+              label="Load"
+              value={draft.load}
+              onChange={(load) => patch({ load })}
+              step={loadStep}
+              min={0}
+              suffix={loadSuffix}
+              hint={loadHint}
+            />
+            {overrideStanding && loadState?.suggested !== undefined ? (
+              <button
+                type="button"
+                onClick={() => patch({ load: loadState.suggested ?? null })}
+                className={LINK_CLASS}
+              >
+                Use suggestion · {formatNumber(loadState.suggested)} {loadSuffix}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         <SelectField
           label="Measure"

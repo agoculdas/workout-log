@@ -19,6 +19,7 @@ import { bodyweightAt } from '../logic/bodyweight';
 import { formatSetSummary } from '../logic/format';
 import { computeRecords, recordKindsFor } from '../logic/records';
 import type { ExerciseRecords, RecordKind } from '../logic/records';
+import { suggestLoad, targetReps } from '../logic/progression';
 import { warmupSets, workingSets } from '../logic/sets';
 import { defaultIncrement, exerciseMassUnit } from '../logic/units';
 import { topSetLoad, totalVolumeKg, type VolumeOptions } from '../logic/volume';
@@ -744,6 +745,7 @@ export type CatalogExerciseOverrides = Partial<
     | 'massUnit'
     | 'measure'
     | 'name'
+    | 'startLoad'
   >
 >;
 
@@ -790,6 +792,7 @@ export async function addExerciseFromCatalog(
     increment: overrides.increment ?? defaultIncrement(unit, massUnit),
     type:
       overrides.type ?? (entry.pattern === 'conditioning' ? 'conditioning' : 'accessory'),
+    ...(overrides.startLoad === undefined ? {} : { startLoad: overrides.startLoad }),
     archived: false,
   });
 }
@@ -902,6 +905,7 @@ export function exerciseSnapshot(exercise: Exercise): ExerciseSnapshot {
     // is deliberately *not* frozen — it lives on the live row and is cleared
     // the moment the exercise is logged.
     ...(exercise.scheme ? { scheme: exercise.scheme } : {}),
+    ...(exercise.startLoad === undefined ? {} : { startLoad: exercise.startLoad }),
     ...(exercise.restOverride ? { restOverride: exercise.restOverride } : {}),
     ...(exercise.note ? { note: exercise.note } : {}),
   };
@@ -932,6 +936,163 @@ function withOverride(row: Exercise, override: ExerciseOverride | undefined): Ex
   if (override) next.override = override;
   else delete next.override;
   return next;
+}
+
+/* ----------------------------------------------------------------- the load */
+
+/**
+ * What one exercise will pre-fill next time, and where that number comes from.
+ * The Programme sheet's Load field is seeded from this, and the day rows show
+ * `current` after the prescription.
+ */
+export interface ExerciseLoadState {
+  /** True once a *finished* session logged a working set for this exercise. */
+  hasHistory: boolean;
+  /** The load the next session pre-fills. Absent when there is none to show. */
+  current?: number;
+  /**
+   * Where `current` came from: the programme's starting load, the progression
+   * suggestion off the last session, a hand-set override, or nowhere.
+   */
+  source: 'start' | 'last' | 'override' | 'none';
+  /** The programme's starting load, when one is set. */
+  startLoad?: number;
+  /** Heaviest working load of the last session — the "Last session: 70 kg" line. */
+  lastLoad?: number;
+  /**
+   * What the plain progression rule says, ignoring any override. Equal to
+   * `current` unless an override is standing, which is exactly when the sheet
+   * offers to go back to it.
+   */
+  suggested?: number;
+}
+
+const NO_LOAD: ExerciseLoadState = { hasHistory: false, source: 'none' };
+
+/**
+ * Load state for many exercises in four queries rather than four per row, so a
+ * day's list can show every load without an N+1 inside a live query.
+ *
+ * Conditioning rows are answered without their best time: it only ever fills a
+ * rep target, and the load it reports is 0 either way.
+ */
+export async function getLoadStates(
+  ids: string[],
+): Promise<Map<string, ExerciseLoadState>> {
+  const out = new Map<string, ExerciseLoadState>();
+  const wanted = [...new Set(ids)];
+  if (wanted.length === 0) return out;
+
+  const rows = (await db.exercises.bulkGet(wanted)).filter((r): r is Exercise => !!r);
+  const sets = await db.setLogs.where('exerciseId').anyOf(wanted).toArray();
+  const sessionIds = [...new Set(sets.map((s) => s.sessionId))];
+  const sessions = await db.sessions.bulkGet(sessionIds);
+  const byId = new Map(sessions.filter((s): s is Session => !!s).map((s) => [s.id, s]));
+
+  /** exerciseId -> sessionId -> that session's sets. */
+  const grouped = new Map<string, Map<string, SetLog[]>>();
+  for (const set of sets) {
+    if (!byId.has(set.sessionId)) continue;
+    let perSession = grouped.get(set.exerciseId);
+    if (!perSession) grouped.set(set.exerciseId, (perSession = new Map()));
+    const list = perSession.get(set.sessionId);
+    if (list) list.push(set);
+    else perSession.set(set.sessionId, [set]);
+  }
+
+  for (const exercise of rows) {
+    const perSession = [...(grouped.get(exercise.id)?.entries() ?? [])]
+      .map(([sessionId, list]) => ({ session: byId.get(sessionId)!, sets: list }))
+      .sort((a, b) => a.session.startedAt - b.session.startedAt);
+
+    // History means a *finished* session with a working set in it: an evening
+    // half-logged is not yet something to progress from.
+    const hasHistory = perSession.some(
+      (h) => h.session.finishedAt !== undefined && workingSets(h.sets).length > 0,
+    );
+    const start = exercise.startLoad;
+
+    if (!hasHistory) {
+      out.set(
+        exercise.id,
+        start !== undefined && start > 0
+          ? { hasHistory: false, current: start, source: 'start', startLoad: start }
+          : { ...NO_LOAD, ...(start === undefined ? {} : { startLoad: start }) },
+      );
+      continue;
+    }
+
+    const lastSets = perSession[perSession.length - 1]?.sets;
+    // The plain rule, with any standing override taken off the row first:
+    // that is the number the sheet offers to go back to.
+    const { override, ...plain } = exercise;
+    const suggested = suggestLoad(plain, lastSets).load;
+    const current = override ? override.load : suggested;
+    const lastLoad = topSetLoad(workingSets(lastSets ?? []));
+    out.set(exercise.id, {
+      hasHistory: true,
+      ...(current > 0 ? { current } : {}),
+      source: override ? 'override' : 'last',
+      ...(start === undefined ? {} : { startLoad: start }),
+      ...(lastLoad > 0 ? { lastLoad } : {}),
+      ...(suggested > 0 ? { suggested } : {}),
+    });
+  }
+
+  return out;
+}
+
+/** One exercise's load state — see `getLoadStates`. */
+export async function getExerciseLoadState(id: string): Promise<ExerciseLoadState> {
+  return (await getLoadStates([id])).get(id) ?? NO_LOAD;
+}
+
+/**
+ * Set what this exercise lifts, from the Programme sheet.
+ *
+ * Which field that lands in depends on whether there is anything to progress
+ * from, so the caller never has to decide:
+ *
+ * - **No completed history** — it is the *starting load*: the first session
+ *   pre-fills it, and nothing else in the app reads it after that.
+ * - **History, and the number is what the rule already suggests** — nothing to
+ *   say, so any standing override is dropped (`cleared`).
+ * - **History, and it is a different number** — a `manual` override: it
+ *   pre-fills the next session and is cleared again the moment the exercise is
+ *   logged, exactly like a deload. A typed load is a decision for one session,
+ *   never a new rule.
+ *
+ * `undefined` clears: the starting load before there is history, the override
+ * after. Throws when the id is not a programme exercise.
+ */
+export async function setExerciseLoad(
+  id: string,
+  load: number | undefined,
+): Promise<{ mode: 'start' | 'override' | 'cleared' }> {
+  const exercise = await db.exercises.get(id);
+  if (!exercise) throw new Error(`Unknown exercise: ${id}`);
+  const state = await getExerciseLoadState(id);
+
+  if (!state.hasHistory) {
+    const next: Exercise = { ...exercise };
+    if (load === undefined) delete next.startLoad;
+    else next.startLoad = load;
+    await db.exercises.put(next);
+    return { mode: 'start' };
+  }
+
+  if (load === undefined || load === (state.suggested ?? 0)) {
+    await setExerciseOverride(id, undefined);
+    return { mode: 'cleared' };
+  }
+
+  await setExerciseOverride(id, {
+    load,
+    reps: targetReps(exercise),
+    kind: 'manual',
+    setAt: Date.now(),
+  });
+  return { mode: 'override' };
 }
 
 /** What `startSession` freezes besides the exercises. */
@@ -2015,7 +2176,8 @@ export async function importMerge(json: unknown): Promise<ImportCounts> {
           typeof r.name === 'string' &&
           typeof r.sets === 'number' &&
           typeof r.repMin === 'number' &&
-          typeof r.repMax === 'number',
+          typeof r.repMax === 'number' &&
+          (r.startLoad === undefined || typeof r.startLoad === 'number'),
         'exercises',
       );
       await merge<Session>(

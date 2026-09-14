@@ -48,8 +48,13 @@ export function StallSheet({
   return (
     <Sheet open={open} onClose={onClose} title={exercise.name}>
       <div className="space-y-4">
+        {/* The same three answers serve two openings — the stalled marker, and
+            a load typed into the Programme — so the line says which one it is
+            rather than asserting a stall that never happened. */}
         <p className="text-sm text-muted">
-          Fewer total reps at the same load in the last 2 sessions.
+          {current?.kind === 'manual'
+            ? `Set in the Programme: ${formatLoad(exercise, current.load)}.`
+            : 'Fewer total reps at the same load in the last 2 sessions.'}
         </p>
 
         <div className="flex flex-col gap-2">

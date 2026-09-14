@@ -3,18 +3,22 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { db, ensureSeeded, resetSeedGuard } from './db';
 import {
   addBodyweight,
+  addExerciseFromCatalog,
   archiveExercise,
   exportAll,
   finishSession,
   getActiveSession,
   getExerciseHistory,
   getLastCompletedSession,
+  getExerciseLoadState,
   getLastSessionSetsForExercise,
+  getLoadStates,
   getSessionDetail,
   getSettings,
   importMerge,
   readSettings,
   listBodyweight,
+  listCatalog,
   listExercises,
   listTemplates,
   logSet,
@@ -24,6 +28,7 @@ import {
   updateSet,
   listSetsForSessionExercise,
   reorderExercises,
+  setExerciseLoad,
   setExerciseOverride,
   startSession,
   updateSettings,
@@ -31,6 +36,7 @@ import {
   wipeAll,
 } from './repo';
 import type { Exercise } from './types';
+import { suggestLoad } from '../logic/progression';
 
 beforeEach(async () => {
   resetSeedGuard();
@@ -794,5 +800,155 @@ describe('progression schemes, stall overrides, rest and notes', () => {
       load: 90,
       kind: 'bottom',
     });
+  });
+});
+
+describe('the load set in the programme', () => {
+  /** The first exercise of Lower A: 4 x 8-10, +5 kg, no history of its own. */
+  async function hackSquat(): Promise<Exercise> {
+    return (await listExercises('lowerA'))[0]!;
+  }
+
+  /** One finished session of `reps` at `load`, so the row has history. */
+  async function logSession(exerciseId: string, load: number, reps: number[]) {
+    const session = await startSession('lowerA');
+    for (const [setIndex, count] of reps.entries()) {
+      await logSet({ sessionId: session.id, exerciseId, setIndex, load, reps: count });
+    }
+    await finishSession(session.id);
+    return session;
+  }
+
+  it('writes a starting load while there is nothing to progress from', async () => {
+    const row = await hackSquat();
+    expect(await setExerciseLoad(row.id, 80)).toEqual({ mode: 'start' });
+    expect((await db.exercises.get(row.id))?.startLoad).toBe(80);
+    expect((await db.exercises.get(row.id))?.override).toBeUndefined();
+
+    expect(await getExerciseLoadState(row.id)).toMatchObject({
+      hasHistory: false,
+      current: 80,
+      source: 'start',
+      startLoad: 80,
+    });
+  });
+
+  it('pre-fills that starting load in the first session', async () => {
+    const row = await hackSquat();
+    await setExerciseLoad(row.id, 80);
+    const stored = (await db.exercises.get(row.id))!;
+    const suggestion = suggestLoad(stored, await getLastSessionSetsForExercise(row.id));
+    expect(suggestion).toMatchObject({ load: 80, reps: 8 });
+    expect(suggestion.reason).toBe('Starting load from your programme.');
+  });
+
+  it('clears the starting load again', async () => {
+    const row = await hackSquat();
+    await setExerciseLoad(row.id, 80);
+    expect(await setExerciseLoad(row.id, undefined)).toEqual({ mode: 'start' });
+    expect((await db.exercises.get(row.id))?.startLoad).toBeUndefined();
+    expect(await getExerciseLoadState(row.id)).toMatchObject({ source: 'none' });
+  });
+
+  it('an unfinished session is not history yet', async () => {
+    const row = await hackSquat();
+    const session = await startSession('lowerA');
+    await logSet({ sessionId: session.id, exerciseId: row.id, setIndex: 0, load: 80, reps: 10 });
+    expect((await getExerciseLoadState(row.id)).hasHistory).toBe(false);
+    expect(await setExerciseLoad(row.id, 75)).toEqual({ mode: 'start' });
+  });
+
+  it('reads the suggestion once a session is logged', async () => {
+    const row = await hackSquat();
+    await setExerciseLoad(row.id, 80);
+    await logSession(row.id, 80, [10, 10, 10, 10]);
+
+    expect(await getExerciseLoadState(row.id)).toMatchObject({
+      hasHistory: true,
+      current: 85,
+      suggested: 85,
+      lastLoad: 80,
+      source: 'last',
+      startLoad: 80,
+    });
+  });
+
+  it('a different number becomes a one-off manual override', async () => {
+    const row = await hackSquat();
+    await logSession(row.id, 80, [10, 10, 10, 10]);
+
+    expect(await setExerciseLoad(row.id, 82.5)).toEqual({ mode: 'override' });
+    expect((await db.exercises.get(row.id))?.override).toMatchObject({
+      load: 82.5,
+      reps: 8,
+      kind: 'manual',
+    });
+    expect(await getExerciseLoadState(row.id)).toMatchObject({
+      current: 82.5,
+      suggested: 85,
+      source: 'override',
+    });
+
+    const stored = (await db.exercises.get(row.id))!;
+    expect(suggestLoad(stored, await getLastSessionSetsForExercise(row.id)).reason).toBe(
+      'Set in Programme — 82.5 kg.',
+    );
+  });
+
+  it('the suggestion itself clears the override instead of pinning it', async () => {
+    const row = await hackSquat();
+    await logSession(row.id, 80, [10, 10, 10, 10]);
+    await setExerciseLoad(row.id, 82.5);
+
+    expect(await setExerciseLoad(row.id, 85)).toEqual({ mode: 'cleared' });
+    expect((await db.exercises.get(row.id))?.override).toBeUndefined();
+
+    await setExerciseLoad(row.id, 82.5);
+    expect(await setExerciseLoad(row.id, undefined)).toEqual({ mode: 'cleared' });
+    expect((await db.exercises.get(row.id))?.override).toBeUndefined();
+  });
+
+  it('never writes a starting load once there is history', async () => {
+    const row = await hackSquat();
+    await logSession(row.id, 80, [10, 10, 10, 10]);
+    await setExerciseLoad(row.id, 82.5);
+    expect((await db.exercises.get(row.id))?.startLoad).toBeUndefined();
+  });
+
+  it('finishSession drops a manual override like any other', async () => {
+    const row = await hackSquat();
+    await logSession(row.id, 80, [10, 10, 10, 10]);
+    await setExerciseLoad(row.id, 82.5);
+    await logSession(row.id, 82.5, [8, 8, 8, 8]);
+    expect((await db.exercises.get(row.id))?.override).toBeUndefined();
+  });
+
+  it('answers a whole day in one batch', async () => {
+    const rows = await listExercises('lowerA');
+    await setExerciseLoad(rows[0]!.id, 80);
+    await logSession(rows[1]!.id, 50, [10, 10, 10]);
+
+    const states = await getLoadStates(rows.map((r) => r.id));
+    expect(states.size).toBe(rows.length);
+    expect(states.get(rows[0]!.id)).toMatchObject({ current: 80, source: 'start' });
+    expect(states.get(rows[1]!.id)?.hasHistory).toBe(true);
+    expect(states.get(rows[2]!.id)).toMatchObject({ hasHistory: false, source: 'none' });
+    expect(await getLoadStates([])).toEqual(new Map());
+  });
+
+  it('freezes the starting load into the session snapshot', async () => {
+    const row = await hackSquat();
+    await setExerciseLoad(row.id, 80);
+    const session = await startSession('lowerA');
+    expect(session.exercises?.find((e) => e.id === row.id)).toMatchObject({ startLoad: 80 });
+    expect(session.exercises![1]!).not.toHaveProperty('startLoad');
+  });
+
+  it('takes a starting load when a catalogue movement is added', async () => {
+    const entry = (await listCatalog())[0]!;
+    const added = await addExerciseFromCatalog('lowerA', entry.id, { startLoad: 40 });
+    expect(added.startLoad).toBe(40);
+    expect(await getExerciseLoadState(added.id)).toMatchObject({ current: 40, source: 'start' });
+    expect((await addExerciseFromCatalog('lowerA', entry.id)).startLoad).toBeUndefined();
   });
 });

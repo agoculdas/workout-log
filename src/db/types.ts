@@ -22,20 +22,22 @@ export type ExerciseType = 'primary' | 'accessory' | 'conditioning';
 export type ProgressionScheme = 'double' | 'linear' | 'none' | 'best-time';
 
 /**
- * A one-off answer to a stall, chosen by hand from the stalled marker. It
- * replaces the suggestion on the sets you have not logged yet — the ones still
- * on screen if you chose it mid-session, the next session's otherwise — and
- * nothing else: `finishSession` clears it from every exercise that logged a
- * working set, so it can never quietly become the new normal. Deloads are
- * never automatic.
+ * A one-off answer to the suggestion, chosen by hand. It replaces the
+ * suggestion on the sets you have not logged yet — the ones still on screen if
+ * you chose it mid-session, the next session's otherwise — and nothing else:
+ * `finishSession` clears it from every exercise that logged a working set, so
+ * it can never quietly become the new normal. Nothing here is automatic.
  */
 export interface ExerciseOverride {
   /** The load to pre-fill, in the exercise's own denomination. */
   load: number;
   /** The reps / seconds / laps target to pre-fill. */
   reps: number;
-  /** Which button set it: 10% off, or back to the bottom of the range. */
-  kind: 'deload' | 'bottom';
+  /**
+   * What set it: one of the two stall buttons (10% off, or back to the bottom
+   * of the range), or a load typed into the Programme sheet (`manual`).
+   */
+  kind: 'deload' | 'bottom' | 'manual';
   /** Epoch ms it was chosen. */
   setAt: number;
 }
@@ -224,6 +226,13 @@ export interface Exercise {
    */
   increment: number;
   type: ExerciseType;
+  /**
+   * What you lift on this exercise before there is anything to go on, in the
+   * exercise's own `massUnit` — set in the Programme sheet so the first session
+   * pre-fills a real number instead of a blank. Read *only* while the exercise
+   * has no completed history; after that the suggestion (and `override`) speak.
+   */
+  startLoad?: number;
   /** How the load advances. Absent means the default for `type`. */
   scheme?: ProgressionScheme;
   /**
@@ -258,6 +267,7 @@ export type ExerciseSnapshot = Pick<
   | 'type'
   | 'catalogId'
   | 'scheme'
+  | 'startLoad'
   | 'restOverride'
   | 'note'
 > & {

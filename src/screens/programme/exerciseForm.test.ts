@@ -9,6 +9,7 @@ import {
   draftToInput,
   hasDenomination,
   incrementLabel,
+  loadApplies,
   unitLabel,
   type ExerciseDraft,
 } from './exerciseForm';
@@ -165,5 +166,52 @@ describe('rest override and note on the draft', () => {
   it('rounds a rest to whole seconds and trims the note', () => {
     const draft: ExerciseDraft = { ...blankDraft(), restOverride: 45.4, note: '  Seat 4  ' };
     expect(draftToInput(draft, 'lowerA')).toMatchObject({ restOverride: 45, note: 'Seat 4' });
+  });
+});
+
+describe('the load on the draft', () => {
+  it('starts empty on a new exercise and on a row with no starting load', () => {
+    expect(blankDraft().load).toBeNull();
+    expect(draftFromExercise(makeExercise()).load).toBeNull();
+  });
+
+  it('reads the stored starting load, and takes a caller-supplied one over it', () => {
+    expect(draftFromExercise(makeExercise({ startLoad: 80 })).load).toBe(80);
+    // What the sheet actually seeds with once there is history: the next
+    // session's load, which the row alone cannot answer.
+    expect(draftFromExercise(makeExercise({ startLoad: 80 }), 85).load).toBe(85);
+    expect(draftFromExercise(makeExercise({ startLoad: 80 }), null).load).toBeNull();
+  });
+
+  it('writes the load as a starting load when creating', () => {
+    const draft: ExerciseDraft = { ...blankDraft(), name: 'Hack squat', load: 80 };
+    expect(draftToInput(draft, 'lowerA').startLoad).toBe(80);
+  });
+
+  it('leaves the stored value alone when updating — setExerciseLoad owns it', () => {
+    const draft: ExerciseDraft = { ...blankDraft(), name: 'Hack squat', load: 80 };
+    expect('startLoad' in draftToInput(draft, 'lowerA', 'ex1')).toBe(false);
+  });
+
+  it('clears it explicitly on create, so an empty field means nothing set', () => {
+    const input = draftToInput({ ...blankDraft(), load: null }, 'lowerA');
+    expect(input.startLoad).toBeUndefined();
+    expect('startLoad' in input).toBe(true);
+  });
+
+  it('drops a load the unit or type cannot carry', () => {
+    const band: ExerciseDraft = { ...blankDraft(), unit: 'band', load: 80 };
+    expect(draftToInput(band, 'lowerA').startLoad).toBeUndefined();
+    const row: ExerciseDraft = { ...blankDraft(), type: 'conditioning', load: 80 };
+    expect(draftToInput(row, 'lowerA').startLoad).toBeUndefined();
+  });
+
+  it('knows which rows have a load worth naming', () => {
+    expect(loadApplies({ unit: 'kg_total', type: 'primary' })).toBe(true);
+    expect(loadApplies({ unit: 'kg_side', type: 'accessory' })).toBe(true);
+    expect(loadApplies({ unit: 'band', type: 'accessory' })).toBe(false);
+    expect(loadApplies({ unit: 'bodyweight', type: 'accessory' })).toBe(false);
+    expect(loadApplies({ unit: 'none', type: 'conditioning' })).toBe(false);
+    expect(loadApplies({ unit: 'kg_total', type: 'conditioning' })).toBe(false);
   });
 });

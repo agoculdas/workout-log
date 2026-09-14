@@ -15,7 +15,9 @@ Shipped and live at https://agoculdas.github.io/workout-log/:
 - **v2.1 (3.2, shipped 2026-09-13)** — personal records: e1RM, heaviest set, most reps, longest hold, best time, best session volume; PR marks in Session, records in the finish summary, exercise history, and a Records tab in History.
 - **v2.2 (shipped 2026-09-14)** — progression schemes per exercise with a hand-picked stall answer (3.3), the on-demand weekly review under Muscles (3.4), per-exercise rest and notes (4.2), skip / reorder / swap-for-today (4.3), live session duration and a History calendar (4.4, no streak), bodyweight in volume (4.5), and automatic weekly backup to a folder on Android Chrome (5.3).
 
-599 tests. Verified on a real phone up to v1.2.
+- **v2.3 (2026-09-14)** — set the load in Programme (starting load / next-session load).
+
+625 tests. Verified on a real phone up to v1.2.
 
 **Effort scale used below.** S = a few files, under an hour of agent time. M = one agent session, a few hundred lines. L = multi-agent build with a schema migration, like the library was.
 
