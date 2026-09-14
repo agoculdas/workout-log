@@ -79,3 +79,48 @@ describe('totalVolumeKg', () => {
     expect(totalVolume([...kg, ...lb])).toBe(2000);
   });
 });
+
+describe('totalVolumeKg with bodyweight counted', () => {
+  const chins = makeSets('s1', 0, [10, 8], { unit: 'bodyweight' });
+  const belted = makeSets('s1', 10, [5], { unit: 'bodyweight' });
+  const press = makeSets('s1', 100, [10], { unit: 'kg_total' });
+
+  it('is unchanged without a bodyweight', () => {
+    expect(totalVolumeKg(chins)).toBe(0);
+    expect(totalVolumeKg([...chins, ...press])).toBe(1000);
+  });
+
+  it('adds bodyweight x reps to bodyweight sets only', () => {
+    expect(totalVolumeKg(chins, { bodyweightKg: 82 })).toBe(82 * 18);
+    expect(totalVolumeKg(press, { bodyweightKg: 82 })).toBe(1000);
+    expect(totalVolumeKg([...chins, ...press], { bodyweightKg: 82 })).toBe(82 * 18 + 1000);
+  });
+
+  it('counts the belt on top of the body', () => {
+    expect(totalVolumeKg(belted, { bodyweightKg: 82 })).toBe((82 + 10) * 5);
+  });
+
+  it('converts an added load in pounds before adding the body', () => {
+    const lb = makeSets('s1', 10, [5], { unit: 'bodyweight', massUnit: 'lb' });
+    expect(totalVolumeKg(lb, { bodyweightKg: 82 })).toBeCloseTo((82 + 4.5359237) * 5, 5);
+  });
+
+  it('reads the unit from the caller when the set carries none', () => {
+    const unstamped = makeSets('s1', 0, [10]);
+    expect(totalVolumeKg(unstamped, { bodyweightKg: 82 })).toBe(0);
+    expect(
+      totalVolumeKg(unstamped, { bodyweightKg: 82, unitFor: () => 'bodyweight' }),
+    ).toBe(820);
+    // The stamp on the row wins over whatever the caller believes.
+    expect(totalVolumeKg(chins, { bodyweightKg: 82, unitFor: () => 'kg_total' })).toBe(
+      82 * 18,
+    );
+  });
+
+  it('still ignores warm-ups', () => {
+    const warm = makeWarmup('s1', 0, 5, {});
+    expect(totalVolumeKg([{ ...warm, unit: 'bodyweight' }, ...chins], { bodyweightKg: 82 })).toBe(
+      82 * 18,
+    );
+  });
+});

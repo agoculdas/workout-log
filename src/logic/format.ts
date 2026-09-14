@@ -18,6 +18,19 @@ export function formatDuration(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+/**
+ * A running clock: "07:41", and "1:07:41" once it passes the hour. Always two
+ * digits on the minutes and seconds so the header does not jiggle as it ticks
+ * — unlike `formatDuration`, which is for reading a finished number.
+ */
+export function formatClock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const s = String(total % 60).padStart(2, '0');
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${String(m).padStart(2, '0')}:${s}`;
+}
+
 /** The rep target as text: "8–10" for a range, "12" for a fixed number. */
 export function formatRepTarget(exercise: Exercise): string {
   if (exercise.measure === 'seconds') {

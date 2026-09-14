@@ -5,6 +5,7 @@ import { Button, Card, ConfirmDialog, PageHeader, Sheet } from '../components';
 import {
   deleteSession,
   getSessionDetail,
+  getVolumeContext,
   listAllSetLogs,
   listAllTemplates,
   listExercises,
@@ -17,6 +18,8 @@ import type { Exercise, Session, SetLog } from '../db/types';
 import { formatDate, formatSetSummary, formatVolumeKg } from '../logic/format';
 import { setCount, totalVolumeKg } from '../logic/volume';
 import { BodyweightSection } from './history/Bodyweight';
+import Calendar from './history/Calendar';
+import { formatDayLabel, sessionDay } from './history/calendarGrid';
 import EditSetSheet from './history/EditSetSheet';
 import { MusclesSection } from './history/Muscles';
 import { RecordsSection } from './history/Records';
@@ -92,13 +95,14 @@ interface SessionRow {
 
 function SessionsSection() {
   const rows = useLiveQuery(async () => {
-    const [sessions, templates, sets] = await Promise.all([
+    const [sessions, templates, sets, volume] = await Promise.all([
       listSessions(false),
       // Every day, whatever programme it belongs to and whether or not it is
       // archived: a session started before snapshots existed still has to
       // resolve its name from somewhere.
       listAllTemplates(),
       listAllSetLogs(),
+      getVolumeContext(),
     ]);
     const nameById = new Map(templates.map((t) => [t.id, t.name]));
     const bySession = new Map<string, SetLog[]>();
@@ -115,12 +119,16 @@ function SessionsSection() {
         templateName:
           session.templateName ?? nameById.get(session.templateId) ?? session.templateId,
         setCount: setCount(own),
-        volumeKg: totalVolumeKg(own),
+        // Bodyweight counts towards the total only when Settings says so and
+        // there was a weigh-in by then — see `getVolumeContext`.
+        volumeKg: totalVolumeKg(own, volume.optionsFor(session)),
       };
     });
   }, []);
 
   const [expanded, setExpanded] = useState<string | null>(null);
+  /** The day the calendar is filtering to, YYYY-MM-DD, or null for all. */
+  const [day, setDay] = useState<string | null>(null);
 
   if (rows === undefined) {
     return <p className="px-4 py-6 text-sm text-muted">Loading…</p>;
@@ -137,10 +145,31 @@ function SessionsSection() {
     );
   }
 
-  const months = groupByMonth(rows);
+  const shown = day ? rows.filter((row) => sessionDay(row.session) === day) : rows;
+  const months = groupByMonth(shown);
 
   return (
     <div className="px-4 pb-8">
+      <Calendar
+        sessions={rows.map((row) => row.session)}
+        selected={day}
+        onSelect={setDay}
+      />
+
+      {day ? (
+        <div className="mb-3 flex items-center gap-2 text-sm text-muted">
+          <span>Showing {formatDayLabel(day)}</span>
+          <span aria-hidden="true">·</span>
+          <button
+            type="button"
+            onClick={() => setDay(null)}
+            className="min-h-11 text-accent underline underline-offset-4"
+          >
+            Clear
+          </button>
+        </div>
+      ) : null}
+
       {months.map((month) => (
         <section key={month.key} className="mb-6">
           <h2 className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">
@@ -199,7 +228,11 @@ function SessionDetail({
   sessionId: string;
   onDeleted: () => void;
 }) {
-  const detail = useLiveQuery(() => getSessionDetail(sessionId), [sessionId]);
+  // Skipped exercises included: a session that dropped one should say so.
+  const detail = useLiveQuery(
+    () => getSessionDetail(sessionId, { includeSkipped: true }),
+    [sessionId],
+  );
   const [confirming, setConfirming] = useState(false);
   const [openExercise, setOpenExercise] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditTarget | null>(null);
@@ -209,7 +242,9 @@ function SessionDetail({
     return <div className="border-t border-border/60 px-4 py-3 text-sm text-muted">Loading…</div>;
   }
 
-  const logged = detail.exercises.filter((e) => detail.setsByExercise[e.id]?.length);
+  const logged = detail.exercises.filter(
+    (e) => e.skipped || detail.setsByExercise[e.id]?.length,
+  );
   const notes = detail.session.notes ?? '';
 
   return (
@@ -219,6 +254,19 @@ function SessionDetail({
           {logged.map((exercise) => {
             const sets = detail.setsByExercise[exercise.id] ?? [];
             const open = openExercise === exercise.id;
+
+            if (exercise.skipped) {
+              return (
+                <li
+                  key={exercise.id}
+                  className="flex min-h-11 items-center gap-3 py-1.5 text-sm opacity-45"
+                >
+                  <span className="min-w-0 flex-1 truncate">{exercise.name}</span>
+                  <span className="shrink-0 text-muted">skipped</span>
+                </li>
+              );
+            }
+
             return (
               <li key={exercise.id}>
                 <button
@@ -227,7 +275,12 @@ function SessionDetail({
                   onClick={() => setOpenExercise((id) => (id === exercise.id ? null : exercise.id))}
                   className="flex min-h-11 w-full items-center gap-3 py-1.5 text-left active:bg-surface-2"
                 >
-                  <span className="min-w-0 flex-1 truncate text-sm">{exercise.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm">
+                    {exercise.name}
+                    {exercise.addedForToday ? (
+                      <span className="text-muted"> (today only)</span>
+                    ) : null}
+                  </span>
                   <span className="shrink-0 text-sm tabular-nums text-muted">
                     {formatSetSummary(exercise, sets)}
                   </span>
@@ -269,12 +322,25 @@ function SessionDetail({
                         </li>
                       ))}
                     </ul>
-                    <Link
-                      to={`/history/${exercise.id}`}
-                      className="mt-1 inline-flex min-h-11 items-center text-sm text-accent underline-offset-2 active:underline"
-                    >
-                      View all sessions →
-                    </Link>
+                    {exercise.addedForToday ? (
+                      // Swapped in for that session alone: there is no history
+                      // to chart, so the library entry is what to point at.
+                      exercise.catalogId ? (
+                        <Link
+                          to={`/programme/library/${exercise.catalogId}`}
+                          className="mt-1 inline-flex min-h-11 items-center text-sm text-accent underline-offset-2 active:underline"
+                        >
+                          View in library →
+                        </Link>
+                      ) : null
+                    ) : (
+                      <Link
+                        to={`/history/${exercise.id}`}
+                        className="mt-1 inline-flex min-h-11 items-center text-sm text-accent underline-offset-2 active:underline"
+                      >
+                        View all sessions →
+                      </Link>
+                    )}
                   </div>
                 ) : null}
               </li>

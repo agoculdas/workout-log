@@ -58,6 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
   barWeight: 20,
   plates: [25, 20, 15, 10, 5, 2.5, 1.25],
   setsPerMuscleTarget: { min: 10, max: 20 },
+  countBodyweight: false,
 };
 
 /* ----------------------------------------------------------------- catalogue */

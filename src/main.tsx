@@ -32,6 +32,22 @@ function requestPersistentStorage(): void {
   }
 }
 
+/**
+ * Roadmap 5.3: if the user has opted in and picked a folder, write the weekly
+ * export into it. Loaded lazily and after the first render, so a browser
+ * without the File System Access API — or a missing permission — costs nothing
+ * and cannot delay or break the app.
+ */
+function startAutoBackup(): void {
+  try {
+    void import('./screens/settings/autoBackup')
+      .then((module) => module.runAutoBackup())
+      .catch(() => undefined);
+  } catch {
+    /* never let a backup attempt reach the user */
+  }
+}
+
 // Seed the programme before first paint so Today has something to show, then
 // repair the active flag if an import or a half-finished delete lost it. The
 // screens only ever *read* which programme is active, so this is the one place
@@ -44,4 +60,5 @@ ensureSeeded()
   .finally(() => {
     requestPersistentStorage();
     render();
+    startAutoBackup();
   });

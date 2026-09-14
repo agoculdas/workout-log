@@ -33,6 +33,7 @@ export function makeSets(
     kind?: SetLog['kind'];
     toFailure?: boolean;
     massUnit?: SetLog['massUnit'];
+    unit?: SetLog['unit'];
   } = {},
 ): SetLog[] {
   const base = opts.completedAt ?? 1_700_000_000_000;
@@ -47,6 +48,7 @@ export function makeSets(
     ...(opts.kind ? { kind: opts.kind } : {}),
     ...(opts.toFailure === undefined ? {} : { toFailure: opts.toFailure }),
     ...(opts.massUnit ? { massUnit: opts.massUnit } : {}),
+    ...(opts.unit ? { unit: opts.unit } : {}),
   }));
 }
 

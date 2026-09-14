@@ -258,7 +258,26 @@ export type ExerciseSnapshot = Pick<
   | 'scheme'
   | 'restOverride'
   | 'note'
->;
+> & {
+  /**
+   * Dropped from *this* session. The programme is untouched: the row stays in
+   * the snapshot so history can say it was skipped, and unskipping is one tap.
+   */
+  skipped?: boolean;
+  /**
+   * Swapped in for this session only. Its `id` is a fresh `tmp_…` that no
+   * `Exercise` row carries, so its sets resolve through this snapshot alone.
+   */
+  addedForToday?: boolean;
+};
+
+/** Prefix of an exercise id that only ever exists inside a session snapshot. */
+export const TEMP_EXERCISE_PREFIX = 'tmp_';
+
+/** True for a swapped-in-for-today exercise id — nothing in `exercises` has one. */
+export function isTempExerciseId(id: string): boolean {
+  return id.startsWith(TEMP_EXERCISE_PREFIX);
+}
 
 export interface Session {
   id: string;
@@ -302,6 +321,12 @@ export interface SetLog {
   toFailure?: boolean;
   /** Stamped from the exercise when the set was logged. Absent means 'kg'. */
   massUnit?: MassUnit;
+  /**
+   * How the `load` number should be read, stamped from the exercise when the
+   * set was logged. Absent on rows written before this existed — read it from
+   * the exercise (or the session snapshot) at compute time instead.
+   */
+  unit?: LoadUnit;
 }
 
 export interface Settings {
@@ -322,6 +347,12 @@ export interface Settings {
   plates: number[];
   /** Weekly hard-set band per muscle, shown as a reference on the report. */
   setsPerMuscleTarget: { min: number; max: number };
+  /**
+   * Count your bodyweight x reps towards volume on `bodyweight` exercises,
+   * using the latest weigh-in at or before the session. Off by default: it
+   * changes what every past session's total says, so it is an opt-in.
+   */
+  countBodyweight?: boolean;
 }
 
 export interface BodyweightEntry {

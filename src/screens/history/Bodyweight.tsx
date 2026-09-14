@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Button, Card, NumberField } from '../../components';
 import { addBodyweight, deleteBodyweight, listBodyweight } from '../../db/repo';
 import { formatDate } from '../../logic/format';
+import BodyweightVolumeToggle from './BodyweightVolumeToggle';
 import { BodyweightChart } from './charts';
 import {
   buildBodyweightSeries,
@@ -117,6 +118,10 @@ export function BodyweightSection() {
           </span>
         ) : null}
       </div>
+
+      <Card>
+        <BodyweightVolumeToggle />
+      </Card>
 
       <BodyweightChart
         data={points}

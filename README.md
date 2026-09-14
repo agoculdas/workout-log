@@ -96,6 +96,13 @@ aeroplane mode.
 - **Plate calculator.** On a barbell exercise loaded as a total, tapping the **kg** suffix shows
   the per-side breakdown against your bar and plates (Settings → Plates), and what is left over
   when the number is unreachable.
+- **Skip, reorder and swap — for today.** The ⋯ beside any exercise in the session overview
+  skips it, moves it one place, or swaps it for a library movement for this session only. All of it
+  is written to the session's own snapshot, so the programme is exactly what it was next week; a
+  swapped-in exercise logs sets normally and reads "(today only)" in History.
+- **Live duration.** The session header counts up from when you started, mm:ss and then hh:mm:ss.
+- **Calendar.** History → Sessions opens on this month, a dot per session on the days you trained.
+  Tapping a trained day filters the list to it; ‹ › walk the months. No streak, no score.
 - **Finish summary.** Ending a session shows duration, sets, volume and a line per exercise, with
   "↑ from 60 kg" wherever the top set beat the last one.
 - **Backup note.** Today shows one muted line when the last export is more than a fortnight old.
@@ -108,6 +115,9 @@ aeroplane mode.
 - **PRs.** A logged working set that beats one of those reads "PR" beside its number, and the
   finish summary lists what the session put in the book. Records start from your **second** session
   of an exercise — a first is a number, not a record — and none of it moves a load suggestion.
+- **Bodyweight in volume.** Off by default. History → Weight has the switch: on, a bodyweight
+  exercise counts your weight × reps (plus any belt) towards session volume, using the latest
+  weigh-in at or before that session. Per-exercise charts stay in their own numbers.
 - **Muscle report.** History → Muscles shows weekly sets per muscle over 1, 4 or 8 weeks — 1 per
   primary muscle of the library entry, 0.5 per secondary, averaged over the weeks that trained —
   plus the week-by-week total and the push:pull and squat:hinge ratios. A shaded 10–20 hard-set band

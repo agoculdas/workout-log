@@ -20,12 +20,21 @@ import {
   getSessionDetail,
   getSessionSummary,
   logSet,
+  moveSessionExercise,
   setExerciseOverride,
+  skipSessionExercise,
+  swapSessionExercise,
   updateSession,
   updateSet,
+  type SessionExercise,
   type SessionSummary,
 } from '../db/repo';
-import { formatLastSession, formatNumber, formatPrescription } from '../logic/format';
+import {
+  formatClock,
+  formatLastSession,
+  formatNumber,
+  formatPrescription,
+} from '../logic/format';
 import { exerciseScheme, suggestLoad } from '../logic/progression';
 import { setBeats, type SetRecordKind } from '../logic/records';
 import { warmupSets, workingSets } from '../logic/sets';
@@ -33,8 +42,10 @@ import { isStalled } from '../logic/stall';
 import { defaultIncrement, exerciseMassUnit, massLabel } from '../logic/units';
 import { topSetLoad } from '../logic/volume';
 import useSettings from '../hooks/useSettings';
+import useElapsed from '../hooks/useElapsed';
 import useRestTimer from '../hooks/useRestTimer';
 import useWakeLock from '../hooks/useWakeLock';
+import LibraryPickerSheet from './programme/LibraryPickerSheet';
 import PlateSheet from './session/PlateSheet';
 import RestTimerBar from './session/RestTimerBar';
 import SetRow from './session/SetRow';
@@ -75,6 +86,31 @@ function recordNote(kinds: SetRecordKind[]): string | undefined {
 /** Working sets logged for an exercise — warm-ups never count towards the plan. */
 function workingCount(sets: SetLog[] | undefined): number {
   return workingSets(sets ?? []).length;
+}
+
+/** One line of the per-exercise menu in the overview sheet. */
+function PlanAction({
+  children,
+  disabled,
+  onClick,
+}: {
+  children: React.ReactNode;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={[
+        'flex min-h-11 items-center rounded-lg px-3 text-left text-sm',
+        disabled ? 'text-muted/40' : 'text-fg active:bg-surface-2',
+      ].join(' ')}
+    >
+      {children}
+    </button>
+  );
 }
 
 /**
@@ -127,8 +163,10 @@ export function Session() {
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [poll]);
 
+  // Skipped exercises come back too: the overview lists them (dimmed, with the
+  // way back), everything that counts the session filters them out below.
   const detail = useLiveQuery(
-    async () => (id ? ((await getSessionDetail(id)) ?? null) : null),
+    async () => (id ? ((await getSessionDetail(id, { includeSkipped: true })) ?? null) : null),
     [id],
   );
 
@@ -140,6 +178,12 @@ export function Session() {
    */
   const [warmupRows, setWarmupRows] = useState<Record<string, number[]>>({});
   const [overviewOpen, setOverviewOpen] = useState(false);
+  /** Which overview row has its menu open, by exercise id. */
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  /** Which exercise the library picker is swapping out, for today only. */
+  const [swapFor, setSwapFor] = useState<string | null>(null);
+  /** Set after a swap so the pager lands on the exercise once it arrives. */
+  const [focusId, setFocusId] = useState<string | null>(null);
   const [finishOpen, setFinishOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   /** The stall sheet, only ever opened by tapping the marker or the reason. */
@@ -154,7 +198,10 @@ export function Session() {
   const askedToNotify = useRef(false);
   const swipeStart = useRef<{ x: number; y: number; pointerId: number } | null>(null);
 
-  const exercises = useMemo(() => detail?.exercises ?? [], [detail]);
+  /** Today's plan in order, skipped rows included. The overview sheet's list. */
+  const plan = useMemo((): SessionExercise[] => detail?.exercises ?? [], [detail]);
+  /** What you are actually working through: the plan minus what today dropped. */
+  const exercises = useMemo(() => plan.filter((e) => !e.skipped), [plan]);
   const safeIndex = exercises.length ? Math.min(index, exercises.length - 1) : 0;
   const exercise = exercises[safeIndex];
   const exerciseId = exercise?.id;
@@ -214,6 +261,24 @@ export function Session() {
     () => topSetLoad(workingSets(info?.lastSets ?? [])),
     [info?.lastSets],
   );
+
+  /** How long you have been in here. A fact in the header, nothing more. */
+  const elapsedMs = useElapsed(detail?.session.startedAt, {
+    running: detail?.session.finishedAt === undefined,
+    ...(detail?.session.finishedAt === undefined ? {} : { until: detail.session.finishedAt }),
+  });
+
+  // A swapped-in exercise only exists once the write lands, so the pager
+  // follows it by id rather than by the index it is about to take. Adjusted
+  // during render (the React-sanctioned shape) rather than in an effect, so
+  // the new exercise is never painted at the old index first.
+  if (focusId) {
+    const at = exercises.findIndex((e) => e.id === focusId);
+    if (at >= 0) {
+      setFocusId(null);
+      setIndex(at);
+    }
+  }
 
   if (detail === undefined) {
     return (
@@ -425,6 +490,28 @@ export function Session() {
     if (stored) await deleteSet(stored.id);
   }
 
+  /** Drop this exercise from today, or put it back. The programme is untouched. */
+  async function toggleSkip(ex: SessionExercise): Promise<void> {
+    if (!id) return;
+    setMenuFor(null);
+    await skipSessionExercise(id, ex.id, !ex.skipped);
+  }
+
+  /** Move one place in today's order. The menu stays open to move again. */
+  async function movePlan(exerciseId: string, direction: 'earlier' | 'later'): Promise<void> {
+    if (!id) return;
+    await moveSessionExercise(id, exerciseId, direction);
+  }
+
+  /** Swap for a library movement, for this session only. */
+  async function chooseSwap(catalogId: string): Promise<void> {
+    const target = swapFor;
+    if (!id || !target) return;
+    setSwapFor(null);
+    const replacement = await swapSessionExercise(id, target, catalogId);
+    setFocusId(replacement.id);
+  }
+
   function goTo(next: number): void {
     if (!exercises.length) return;
     const clamped = Math.max(0, Math.min(exercises.length - 1, next));
@@ -511,7 +598,8 @@ export function Session() {
 
           <div className="min-w-0 flex-1 pt-0.5">
             <div className="text-[11px] tracking-wide text-muted uppercase">
-              {safeIndex + 1} / {exercises.length} · {title}
+              {safeIndex + 1} / {exercises.length} · {title} ·{' '}
+              <span className="tabular-nums">{formatClock(elapsedMs / 1000)}</span>
             </div>
             <h1 className="text-xl leading-tight font-bold tracking-tight">{exercise.name}</h1>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted">
@@ -744,44 +832,115 @@ export function Session() {
         }
       >
         <ul className="flex flex-col gap-1">
-          {exercises.map((ex, i) => {
+          {plan.map((ex, at) => {
             const done = workingCount(detail.setsByExercise[ex.id]);
             const planned = plannedSets(ex);
+            // Where it sits in what you are working through, or nowhere.
+            const position = ex.skipped ? -1 : exercises.findIndex((e) => e.id === ex.id);
+            const open = menuFor === ex.id;
             return (
               <li key={ex.id}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    goTo(i);
-                    setOverviewOpen(false);
-                  }}
+                <div
                   className={[
-                    'flex min-h-14 w-full items-center gap-3 rounded-xl px-3 text-left active:bg-surface-2',
-                    i === safeIndex ? 'bg-surface-2' : '',
+                    'flex items-center gap-1 rounded-xl',
+                    position === safeIndex ? 'bg-surface-2' : '',
                   ].join(' ')}
                 >
-                  <span className="w-5 text-sm tabular-nums text-muted">{i + 1}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-base">{ex.name}</span>
-                    <span className="block text-xs text-muted">{formatPrescription(ex)}</span>
-                    {ex.note ? (
-                      <span className="block truncate text-xs text-muted">{ex.note}</span>
-                    ) : null}
-                  </span>
-                  <span
+                  <button
+                    type="button"
+                    disabled={ex.skipped}
+                    onClick={() => {
+                      goTo(position);
+                      setOverviewOpen(false);
+                    }}
                     className={[
-                      'shrink-0 text-xs tabular-nums',
-                      done >= planned ? 'text-accent' : 'text-muted',
+                      'flex min-h-14 min-w-0 flex-1 items-center gap-3 rounded-xl px-3 text-left',
+                      ex.skipped ? 'opacity-45' : 'active:bg-surface-2',
                     ].join(' ')}
                   >
-                    {done}/{planned}
-                  </span>
-                </button>
+                    <span className="w-5 text-sm tabular-nums text-muted">
+                      {position >= 0 ? position + 1 : '·'}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-base">
+                        {ex.name}
+                        {ex.addedForToday ? (
+                          <span className="text-muted"> (today only)</span>
+                        ) : null}
+                      </span>
+                      <span className="block text-xs text-muted">{formatPrescription(ex)}</span>
+                      {ex.note ? (
+                        <span className="block truncate text-xs text-muted">{ex.note}</span>
+                      ) : null}
+                    </span>
+                    <span
+                      className={[
+                        'shrink-0 text-xs tabular-nums',
+                        !ex.skipped && done >= planned ? 'text-accent' : 'text-muted',
+                      ].join(' ')}
+                    >
+                      {ex.skipped ? 'skipped' : `${done}/${planned}`}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Change ${ex.name} for today`}
+                    aria-expanded={open}
+                    onClick={() => setMenuFor(open ? null : ex.id)}
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg text-muted active:bg-surface-2"
+                  >
+                    ⋯
+                  </button>
+                </div>
+
+                {open ? (
+                  <div className="mt-1 mb-1 flex flex-col rounded-xl bg-surface-2/60 p-1">
+                    <PlanAction onClick={() => void toggleSkip(ex)}>
+                      {ex.skipped ? 'Unskip' : 'Skip today'}
+                    </PlanAction>
+                    <PlanAction
+                      disabled={at === 0}
+                      onClick={() => void movePlan(ex.id, 'earlier')}
+                    >
+                      Move earlier
+                    </PlanAction>
+                    <PlanAction
+                      disabled={at === plan.length - 1}
+                      onClick={() => void movePlan(ex.id, 'later')}
+                    >
+                      Move later
+                    </PlanAction>
+                    <PlanAction
+                      onClick={() => {
+                        setMenuFor(null);
+                        setOverviewOpen(false);
+                        setSwapFor(ex.id);
+                      }}
+                    >
+                      Swap for today…
+                    </PlanAction>
+                  </div>
+                ) : null}
               </li>
             );
           })}
         </ul>
       </Sheet>
+
+      <LibraryPickerSheet
+        open={swapFor !== null}
+        title="Swap for today"
+        note={
+          swapFor
+            ? `Only this session. The programme keeps ${
+                plan.find((e) => e.id === swapFor)?.name ?? 'the original'
+              }.`
+            : undefined
+        }
+        actionLabel="Swap in"
+        onChoose={(entry) => void chooseSwap(entry.id)}
+        onClose={() => setSwapFor(null)}
+      />
 
       <StallSheet
         open={stallOpen}

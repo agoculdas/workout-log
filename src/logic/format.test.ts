@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatClock,
   formatDuration,
   formatLastSession,
   formatLoad,
@@ -23,6 +24,26 @@ describe('formatNumber / formatDuration', () => {
     expect(formatDuration(45)).toBe('45s');
     expect(formatDuration(252)).toBe('4:12');
     expect(formatDuration(600)).toBe('10:00');
+  });
+});
+
+describe('formatClock', () => {
+  it('pads to mm:ss', () => {
+    expect(formatClock(0)).toBe('00:00');
+    expect(formatClock(9)).toBe('00:09');
+    expect(formatClock(61)).toBe('01:01');
+    expect(formatClock(599)).toBe('09:59');
+  });
+
+  it('grows an hours field past the hour', () => {
+    expect(formatClock(3600)).toBe('1:00:00');
+    expect(formatClock(4061)).toBe('1:07:41');
+    expect(formatClock(36_000)).toBe('10:00:00');
+  });
+
+  it('floors fractions and never goes negative', () => {
+    expect(formatClock(9.99)).toBe('00:09');
+    expect(formatClock(-5)).toBe('00:00');
   });
 });
 

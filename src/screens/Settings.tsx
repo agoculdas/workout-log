@@ -24,6 +24,14 @@ import {
   summariseImport,
 } from './settings/backup';
 import useInstallPrompt from './settings/useInstallPrompt';
+import {
+  chooseBackupFolder,
+  disableAutoBackup,
+  getAutoBackupState,
+  runAutoBackup,
+  type AutoBackupResult,
+  type AutoBackupState,
+} from './settings/autoBackup';
 
 const APP_VERSION = (import.meta.env.VITE_APP_VERSION as string | undefined) ?? '1.0.0';
 
@@ -107,6 +115,27 @@ const NOTIFY_LABEL: Record<NotifyState, string> = {
   denied: 'Blocked — turn it back on in your browser settings',
   default: 'Not asked yet',
 };
+
+/** What a `runAutoBackup` outcome looks like in the status banner. */
+function autoBackupStatus(result: AutoBackupResult, folder?: string): Status {
+  switch (result) {
+    case 'written':
+      return { kind: 'ok', text: folder ? `Backup written to ${folder}.` : 'Backup written.' };
+    case 'skipped':
+      return { kind: 'ok', text: 'Already backed up this week — nothing to write.' };
+    case 'no-permission':
+      return {
+        kind: 'error',
+        text: 'The browser did not grant access to that folder. Try choosing it again.',
+      };
+    case 'unsupported':
+      return { kind: 'error', text: 'This browser cannot write to a folder.' };
+    case 'disabled':
+      return { kind: 'error', text: 'Automatic backup is off. Choose a folder first.' };
+    default:
+      return { kind: 'error', text: 'Automatic backup failed. Try again.' };
+  }
+}
 
 /** Seconds and set counts are whole numbers; bar weight and plates are not. */
 const WHOLE = (n: number) => Math.max(0, Math.round(n));
@@ -222,6 +251,7 @@ export function Settings() {
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [notify, setNotify] = useState<NotifyState>(readNotifyState);
   const [newPlate, setNewPlate] = useState<number | null>(null);
+  const [autoBackup, setAutoBackup] = useState<AutoBackupState | null>(null);
 
   /**
    * Settings writes are read-modify-write, so two taps in quick succession can
@@ -266,6 +296,55 @@ export function Settings() {
       cancelled = true;
     };
   }, []);
+
+  /** Folder name, permission and last-written stamp live outside Dexie. */
+  useEffect(() => {
+    let cancelled = false;
+    void getAutoBackupState().then((state) => {
+      if (!cancelled) setAutoBackup(state);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const refreshAutoBackup = async () => {
+    setAutoBackup(await getAutoBackupState());
+  };
+
+  /** The picker needs the click itself, so no `await` may come before it. */
+  const pickBackupFolder = async () => {
+    setBusy(true);
+    try {
+      if (!(await chooseBackupFolder())) {
+        await refreshAutoBackup();
+        setStatus(null);
+        return;
+      }
+      const result = await runAutoBackup({ force: true });
+      await refreshAutoBackup();
+      setStatus(autoBackupStatus(result));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const backUpNow = async () => {
+    setBusy(true);
+    try {
+      const result = await runAutoBackup({ force: true });
+      await refreshAutoBackup();
+      setStatus(autoBackupStatus(result, autoBackup?.folderName));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const turnOffAutoBackup = async () => {
+    await disableAutoBackup();
+    await refreshAutoBackup();
+    setStatus({ kind: 'ok', text: 'Automatic backup turned off.' });
+  };
 
   /** The app already asked once at launch; this is the user asking again. */
   const requestPersist = async () => {
@@ -559,6 +638,55 @@ export function Settings() {
             {settings.lastExportAt === undefined ? 'never' : formatDate(settings.lastExportAt)}.
             Some installed PWAs block file downloads — the clipboard copy is the fallback.
           </p>
+        </div>
+
+        <div className="space-y-3 border-t border-border/70 pt-4">
+          <p className="text-base">Automatic backup (Android Chrome)</p>
+          {autoBackup === null ? null : !autoBackup.supported ? (
+            <p className="text-xs text-muted">
+              Not available in this browser. iOS has no equivalent; export by hand.
+            </p>
+          ) : !autoBackup.enabled ? (
+            <>
+              <Button full variant="secondary" disabled={busy} onClick={() => void pickBackupFolder()}>
+                Choose folder…
+              </Button>
+              <p className="text-xs text-muted">
+                Pick a folder once and the app writes a JSON export into it weekly.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-muted">
+                Folder: <span className="text-fg">{autoBackup.folderName ?? '—'}</span> · last backup{' '}
+                {autoBackup.lastAt === undefined ? 'never' : formatDate(autoBackup.lastAt)}
+              </p>
+              {autoBackup.permission === 'prompt' ? (
+                <p className="text-xs text-muted">Tap “Back up now” to re-allow access.</p>
+              ) : null}
+              {autoBackup.permission === 'denied' ? (
+                <p className="text-xs text-muted">
+                  Access to that folder was blocked. Choose it again to restore it.
+                </p>
+              ) : null}
+              <div className="flex gap-2">
+                <Button
+                  full
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => void backUpNow()}
+                >
+                  Back up now
+                </Button>
+                <Button full variant="secondary" disabled={busy} onClick={() => void turnOffAutoBackup()}>
+                  Turn off
+                </Button>
+              </div>
+              <p className="text-xs text-muted">
+                Writes a JSON export weekly when you open the app; keeps the 8 newest files.
+              </p>
+            </>
+          )}
         </div>
 
         <div className="space-y-2 border-t border-border/70 pt-4">

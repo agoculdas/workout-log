@@ -15,13 +15,14 @@ import {
 } from './seed';
 import { getPreset } from './presets';
 import { tallyMuscles } from '../logic/muscleVolume';
+import { bodyweightAt } from '../logic/bodyweight';
 import { formatSetSummary } from '../logic/format';
 import { computeRecords, recordKindsFor } from '../logic/records';
 import type { ExerciseRecords, RecordKind } from '../logic/records';
 import { warmupSets, workingSets } from '../logic/sets';
 import { defaultIncrement, exerciseMassUnit } from '../logic/units';
-import { topSetLoad, totalVolumeKg } from '../logic/volume';
-import { EQUIPMENT, MUSCLES, PATTERNS } from './types';
+import { topSetLoad, totalVolumeKg, type VolumeOptions } from '../logic/volume';
+import { EQUIPMENT, MUSCLES, PATTERNS, TEMP_EXERCISE_PREFIX } from './types';
 import type {
   BodyweightEntry,
   CatalogEntry,
@@ -31,6 +32,7 @@ import type {
   ExerciseSnapshot,
   ExportBundle,
   ImportCounts,
+  LoadUnit,
   MassUnit,
   Measure,
   Muscle,
@@ -46,6 +48,7 @@ import type {
 } from './types';
 
 export type { MuscleVolumeResult, MuscleVolumeRow, PatternBalance } from './types';
+export type { VolumeOptions } from '../logic/volume';
 export type { ExerciseRecords, RecordEntry, RecordKind } from '../logic/records';
 export { PRESETS, getPreset } from './presets';
 export type { PresetDay, ProgrammePreset } from './presets';
@@ -67,6 +70,7 @@ function withDefaults(row: Settings): Settings {
       ...DEFAULT_SETTINGS.setsPerMuscleTarget,
       ...(row.setsPerMuscleTarget ?? {}),
     },
+    countBodyweight: row.countBodyweight === true,
   };
 }
 
@@ -1035,6 +1039,18 @@ export async function deleteSession(id: string): Promise<void> {
   });
 }
 
+/**
+ * A session-plan exercise: the frozen prescription rendered as a full
+ * `Exercise`, plus what today did to it. Both marks are session-local and
+ * never touch the programme.
+ */
+export interface SessionExercise extends Exercise {
+  /** Dropped from this session. Excluded from the plan unless asked for. */
+  skipped?: boolean;
+  /** Swapped in for this session only; its id is a `tmp_…`. */
+  addedForToday?: boolean;
+}
+
 export interface SessionDetail {
   session: Session;
   /** The live day row, when it still exists. */
@@ -1042,27 +1058,38 @@ export interface SessionDetail {
   /** The session's own snapshot of the day's name, else the live row's. */
   templateName: string;
   /**
-   * The session's exercises in order: its snapshot when it has one, otherwise
-   * the template's live rows — plus any extra exercise that has sets logged.
+   * The session's exercises in plan order: its snapshot when it has one,
+   * otherwise the template's live rows — plus any extra exercise that has sets
+   * logged. Exercises skipped for today are left out unless `includeSkipped`.
    */
-  exercises: Exercise[];
+  exercises: SessionExercise[];
   /** exerciseId -> that session's sets, sorted by setIndex. */
   setsByExercise: Record<string, SetLog[]>;
   /** Every set in the session, sorted by setIndex then time. */
   sets: SetLog[];
 }
 
+export interface SessionDetailOptions {
+  /**
+   * Keep the exercises skipped for today. The Session screen and History want
+   * them (to unskip, and to say the session skipped them); everything that
+   * counts what was done does not.
+   */
+  includeSkipped?: boolean;
+}
+
 /**
  * A snapshot rendered as a full `Exercise`: the frozen prescription wins, the
  * live row supplies what a snapshot does not carry (increment, order) so the
- * screens keep working with one shape.
+ * screens keep working with one shape. An exercise swapped in for today has no
+ * live row at all — a `tmp_` id is only ever in the snapshot.
  */
 function fromSnapshot(
   snapshot: ExerciseSnapshot,
   live: Exercise | undefined,
   templateId: string,
   order: number,
-): Exercise {
+): SessionExercise {
   return {
     templateId: live?.templateId ?? templateId,
     order: live?.order ?? order,
@@ -1081,7 +1108,10 @@ function fromSnapshot(
   };
 }
 
-export async function getSessionDetail(id: string): Promise<SessionDetail | undefined> {
+export async function getSessionDetail(
+  id: string,
+  opts: SessionDetailOptions = {},
+): Promise<SessionDetail | undefined> {
   const session = await db.sessions.get(id);
   if (!session) return undefined;
   const [template, templateExercises, sets] = await Promise.all([
@@ -1092,8 +1122,9 @@ export async function getSessionDetail(id: string): Promise<SessionDetail | unde
   sets.sort((a, b) => a.setIndex - b.setIndex || a.completedAt - b.completedAt);
 
   const snapshot = session.exercises;
-  let exercises: Exercise[];
+  let exercises: SessionExercise[];
   if (snapshot?.length) {
+    // `tmp_` ids are never in the exercises table; `bulkGet` just misses them.
     const liveRows = await db.exercises.bulkGet(snapshot.map((s) => s.id));
     const liveById = new Map<string, Exercise>();
     liveRows.forEach((row) => {
@@ -1106,8 +1137,17 @@ export async function getSessionDetail(id: string): Promise<SessionDetail | unde
     exercises = [...templateExercises];
   }
 
+  // What today dropped stays out of the plan, and out of the extras below, so
+  // a skip cannot be undone by the sets that were logged before it.
+  const skippedIds = new Set(
+    (snapshot ?? []).filter((snap) => snap.skipped).map((snap) => snap.id),
+  );
+  if (!opts.includeSkipped) exercises = exercises.filter((e) => !e.skipped);
+
   const known = new Set(exercises.map((e) => e.id));
-  const extraIds = [...new Set(sets.map((s) => s.exerciseId))].filter((x) => !known.has(x));
+  const extraIds = [...new Set(sets.map((s) => s.exerciseId))].filter(
+    (x) => !known.has(x) && !skippedIds.has(x),
+  );
   if (extraIds.length) {
     const extras = await db.exercises.bulkGet(extraIds);
     extras.forEach((e) => {
@@ -1126,6 +1166,255 @@ export async function getSessionDetail(id: string): Promise<SessionDetail | unde
     exercises,
     setsByExercise,
     sets,
+  };
+}
+
+/* -------------------------------------------------------- the session plan */
+
+/**
+ * Skip, reorder and swap — for today only.
+ *
+ * A session already freezes the day's exercises into `Session.exercises`, and
+ * that snapshot *is* the plan you are working through: its order is the order
+ * of the pager, and a row marked `skipped` drops out of it. Every operation
+ * here rewrites that one array and nothing else, so the programme is never
+ * touched: change your mind mid-session and next week's Lower A is exactly
+ * what it always was.
+ *
+ * A swapped-in exercise gets a fresh `tmp_` id that no `Exercise` row carries.
+ * Its sets are logged against that id and resolve through the snapshot (name,
+ * catalogue link, units) wherever an exercise would normally be looked up —
+ * history, muscle volume and records all read it that way.
+ */
+
+/**
+ * The session's plan. A session started before snapshots existed has none, so
+ * one is built from the day's live rows the first time it is edited.
+ */
+async function planFor(session: Session): Promise<ExerciseSnapshot[]> {
+  if (session.exercises?.length) return session.exercises.map((snap) => ({ ...snap }));
+  const rows = await listExercises(session.templateId);
+  return rows.map(exerciseSnapshot);
+}
+
+/** The session's plan as stored, skipped rows included. */
+export async function getSessionPlan(sessionId: string): Promise<ExerciseSnapshot[]> {
+  const session = await db.sessions.get(sessionId);
+  if (!session) throw new Error(`Unknown session: ${sessionId}`);
+  return planFor(session);
+}
+
+/**
+ * Replace a session's plan wholesale. Ids must be unique — two entries sharing
+ * one id would share their sets, since a set only names an exercise id.
+ */
+export async function updateSessionPlan(
+  sessionId: string,
+  exercises: ExerciseSnapshot[],
+): Promise<void> {
+  const seen = new Set<string>();
+  for (const entry of exercises) {
+    if (typeof entry.id !== 'string' || !entry.id) {
+      throw new Error('Every session plan entry needs an id.');
+    }
+    if (seen.has(entry.id)) {
+      throw new Error(`Duplicate exercise in the session plan: ${entry.id}`);
+    }
+    seen.add(entry.id);
+  }
+  await db.transaction('rw', db.sessions, async () => {
+    const session = await db.sessions.get(sessionId);
+    if (!session) throw new Error(`Unknown session: ${sessionId}`);
+    await db.sessions.put({ ...session, exercises: exercises.map((e) => ({ ...e })) });
+  });
+}
+
+/**
+ * Drop an exercise from today (or put it back). Nothing is deleted: the row
+ * stays in the plan, so History can say the session skipped it and unskipping
+ * is one tap.
+ */
+export async function skipSessionExercise(
+  sessionId: string,
+  exerciseId: string,
+  skipped = true,
+): Promise<void> {
+  const session = await db.sessions.get(sessionId);
+  if (!session) throw new Error(`Unknown session: ${sessionId}`);
+  const plan = await planFor(session);
+  const entry = plan.find((e) => e.id === exerciseId);
+  if (!entry) throw new Error(`That exercise is not in this session: ${exerciseId}`);
+  if (skipped) entry.skipped = true;
+  else delete entry.skipped;
+  await updateSessionPlan(sessionId, plan);
+}
+
+/**
+ * Move one exercise up or down today's order. Already first (or last) is a
+ * no-op rather than an error — the control is simply disabled there.
+ */
+export async function moveSessionExercise(
+  sessionId: string,
+  exerciseId: string,
+  direction: 'earlier' | 'later',
+): Promise<void> {
+  const session = await db.sessions.get(sessionId);
+  if (!session) throw new Error(`Unknown session: ${sessionId}`);
+  const plan = await planFor(session);
+  const from = plan.findIndex((e) => e.id === exerciseId);
+  if (from < 0) throw new Error(`That exercise is not in this session: ${exerciseId}`);
+  const to = direction === 'earlier' ? from - 1 : from + 1;
+  if (to < 0 || to >= plan.length) return;
+  const moving = plan[from]!;
+  plan[from] = plan[to]!;
+  plan[to] = moving;
+  await updateSessionPlan(sessionId, plan);
+}
+
+/**
+ * Swap an exercise for a library movement, for today only.
+ *
+ * The outgoing row is marked skipped and stays where it was; the incoming one
+ * is built from the catalogue entry — its name, unit, measure and per-side
+ * flag, with the denomination from Settings — and takes the outgoing row's
+ * sets and rep target, since "the same prescription, different machine" is
+ * what a swap is. Two exceptions, both from the rule that nothing carries
+ * across a change of measure: swapping reps for seconds (or laps) takes the
+ * incoming measure's default target instead of the old numbers, and drops the
+ * progression scheme. Whether it is conditioning is likewise the entry's call.
+ *
+ * Returns the snapshot it inserted — its `tmp_` id is what sets get logged
+ * against.
+ */
+export async function swapSessionExercise(
+  sessionId: string,
+  exerciseId: string,
+  catalogId: string,
+): Promise<ExerciseSnapshot> {
+  const [session, entry, massUnit] = await Promise.all([
+    db.sessions.get(sessionId),
+    db.catalog.get(catalogId),
+    defaultMassUnit(),
+  ]);
+  if (!session) throw new Error(`Unknown session: ${sessionId}`);
+  if (!entry) throw new Error(`Unknown catalogue entry: ${catalogId}`);
+
+  const plan = await planFor(session);
+  const at = plan.findIndex((e) => e.id === exerciseId);
+  if (at < 0) throw new Error(`That exercise is not in this session: ${exerciseId}`);
+  const outgoing = plan[at]!;
+
+  const measure = entry.defaultMeasure;
+  const sameMeasure = measure === outgoing.measure;
+  const target = sameMeasure
+    ? { repMin: outgoing.repMin, repMax: outgoing.repMax }
+    : defaultTargetFor(measure);
+  const type =
+    entry.pattern === 'conditioning'
+      ? 'conditioning'
+      : outgoing.type === 'conditioning'
+        ? 'accessory'
+        : outgoing.type;
+
+  const replacement: ExerciseSnapshot = {
+    id: `${TEMP_EXERCISE_PREFIX}${newId()}`,
+    name: entry.name,
+    sets: outgoing.sets,
+    repMin: target.repMin,
+    repMax: target.repMax,
+    measure,
+    perSide: entry.unilateral,
+    unit: entry.defaultUnit,
+    massUnit,
+    type,
+    catalogId: entry.id,
+    addedForToday: true,
+    ...(sameMeasure && outgoing.scheme ? { scheme: outgoing.scheme } : {}),
+  };
+
+  outgoing.skipped = true;
+  plan.splice(at, 0, replacement);
+  await updateSessionPlan(sessionId, plan);
+  return replacement;
+}
+
+/**
+ * One exercise by id, wherever it lives: the programme row, or — for an
+ * exercise swapped in for a single session — the snapshot of the session that
+ * introduced it. Only the snapshot fallback knows what a `tmp_` id means.
+ */
+async function resolveExercise(id: string): Promise<SessionExercise | undefined> {
+  const live = await db.exercises.get(id);
+  if (live) return live;
+  const sessions = await db.sessions.toArray();
+  for (const session of sessions) {
+    const snap = session.exercises?.find((e) => e.id === id);
+    if (snap) return fromSnapshot(snap, undefined, session.templateId, 0);
+  }
+  return undefined;
+}
+
+/** The same lookup when the session is already known — no table scan needed. */
+async function resolveSessionExercise(
+  sessionId: string,
+  exerciseId: string,
+): Promise<SessionExercise | undefined> {
+  const live = await db.exercises.get(exerciseId);
+  if (live) return live;
+  const session = await db.sessions.get(sessionId);
+  const snap = session?.exercises?.find((e) => e.id === exerciseId);
+  return snap && session
+    ? fromSnapshot(snap, undefined, session.templateId, 0)
+    : undefined;
+}
+
+/* ------------------------------------------------------- volume in context */
+
+/**
+ * What a volume total needs to know beyond the sets themselves: how to read a
+ * set logged before `SetLog.unit` existed, and — when Settings says so — what
+ * you weighed on the day, so bodyweight work counts the body it moved.
+ */
+export interface VolumeContext {
+  /** `Settings.countBodyweight`. False means the numbers are unchanged. */
+  countBodyweight: boolean;
+  /** Options for `totalVolumeKg` over the sets of one session. */
+  optionsFor(session: Pick<Session, 'startedAt' | 'finishedAt'>): VolumeOptions;
+}
+
+/**
+ * Read once, use for every session on the screen. The unit map takes session
+ * snapshots first and live rows second, the same way muscle volume resolves a
+ * catalogue link: what the exercise was on the day beats what it is now.
+ */
+export async function getVolumeContext(): Promise<VolumeContext> {
+  const [settings, entries, sessions, exercises] = await Promise.all([
+    readSettings(),
+    db.bodyweight.toArray(),
+    db.sessions.toArray(),
+    db.exercises.toArray(),
+  ]);
+  const countBodyweight = settings?.countBodyweight === true;
+
+  const unitById = new Map<string, LoadUnit>();
+  for (const session of sessions) {
+    for (const snap of session.exercises ?? []) {
+      if (!unitById.has(snap.id)) unitById.set(snap.id, snap.unit);
+    }
+  }
+  for (const exercise of exercises) {
+    if (!unitById.has(exercise.id)) unitById.set(exercise.id, exercise.unit);
+  }
+  const unitFor = (set: SetLog): LoadUnit | undefined => unitById.get(set.exerciseId);
+
+  return {
+    countBodyweight,
+    optionsFor(session) {
+      const kg = countBodyweight
+        ? bodyweightAt(entries, session.finishedAt ?? session.startedAt)
+        : undefined;
+      return { unitFor, ...(kg === undefined ? {} : { bodyweightKg: kg }) };
+    },
   };
 }
 
@@ -1177,6 +1466,7 @@ export async function getSessionSummary(
   const detail = await getSessionDetail(sessionId);
   if (!detail) return undefined;
   const { session, templateName, exercises, setsByExercise, sets } = detail;
+  const volume = await getVolumeContext();
 
   const rows: SessionSummaryExercise[] = [];
   for (const exercise of exercises) {
@@ -1217,7 +1507,7 @@ export async function getSessionSummary(
     durationMs: Math.max(0, (session.finishedAt ?? Date.now()) - session.startedAt),
     setsLogged: workingSets(sets).length,
     warmups: warmupSets(sets).length,
-    volumeKg: totalVolumeKg(sets),
+    volumeKg: totalVolumeKg(sets, volume.optionsFor(session)),
     exercises: rows,
     records: await getSessionRecords(sessionId),
   };
@@ -1248,7 +1538,9 @@ export async function getExerciseRecords(
   exerciseId: string,
   opts: { excludeSessionId?: string } = {},
 ): Promise<ExerciseRecords> {
-  const exercise = await db.exercises.get(exerciseId);
+  // An exercise swapped in for today has no programme row — it resolves
+  // through the snapshot of the session that introduced it.
+  const exercise = await resolveExercise(exerciseId);
   if (!exercise) return {};
   const history = await getExerciseHistory(exerciseId);
   return computeRecords(exercise, completedHistory(history, opts.excludeSessionId));
@@ -1413,6 +1705,8 @@ export interface LogSetInput {
   toFailure?: boolean;
   /** Omit and the exercise's own denomination is stamped on. */
   massUnit?: MassUnit;
+  /** Omit and the exercise's own load unit is stamped on. */
+  unit?: LoadUnit;
 }
 
 /**
@@ -1424,8 +1718,11 @@ export interface LogSetInput {
  * (or patch the row with `updateSet`).
  */
 export async function logSet(input: LogSetInput): Promise<SetLog> {
-  const massUnit =
-    input.massUnit ?? exerciseMassUnit(await db.exercises.get(input.exerciseId));
+  // `tmp_` exercises live only in the session's plan, so the lookup has to go
+  // through it; everything else finds its programme row first.
+  const exercise = await resolveSessionExercise(input.sessionId, input.exerciseId);
+  const massUnit = input.massUnit ?? exerciseMassUnit(exercise);
+  const unit = input.unit ?? exercise?.unit;
   return db.transaction('rw', db.setLogs, async () => {
     const existing = await db.setLogs
       .where('[sessionId+exerciseId]')
@@ -1441,6 +1738,7 @@ export async function logSet(input: LogSetInput): Promise<SetLog> {
       reps: input.reps,
       completedAt: input.completedAt ?? Date.now(),
       massUnit,
+      ...(unit ? { unit } : {}),
       ...(input.kind ? { kind: input.kind } : {}),
       ...(input.toFailure === undefined ? {} : { toFailure: input.toFailure }),
     };
