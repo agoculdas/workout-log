@@ -59,7 +59,15 @@ export interface ExerciseRecords {
   longest?: RecordEntry;
   /** Fastest time, in seconds — conditioning only, where lower is better. */
   bestTime?: RecordEntry;
-  /** Best session volume (load x reps summed), in the exercise's own numbers. */
+  /**
+   * Best session volume (load x reps summed), in the exercise's own numbers.
+   *
+   * Deliberately *native*: `Settings.countBodyweight` changes what a session
+   * total says (see `totalVolumeKg`), but it never reaches here. A record is
+   * the number you put up, and turning a display option on or off must not
+   * rewrite the book — nor can it, since `bestVolume` only applies to loaded
+   * rep work, where bodyweight counts for nothing anyway.
+   */
   bestVolume?: RecordEntry;
 }
 

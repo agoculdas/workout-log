@@ -34,9 +34,14 @@ function requestPersistentStorage(): void {
 
 /**
  * Roadmap 5.3: if the user has opted in and picked a folder, write the weekly
- * export into it. Loaded lazily and after the first render, so a browser
- * without the File System Access API — or a missing permission — costs nothing
- * and cannot delay or break the app.
+ * export into it.
+ *
+ * Called after `render()`, and through a dynamic `import()` so none of it —
+ * not the module's own top level, not the database read, not the export —
+ * runs before the first paint. A browser without the File System Access API
+ * (every iOS one) answers `unsupported` and stops there; every failure path
+ * inside resolves rather than throwing, and the two guards here catch the rest,
+ * so a backup attempt can never reach the user.
  */
 function startAutoBackup(): void {
   try {

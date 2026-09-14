@@ -3,14 +3,17 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { db, ensureSeeded, resetSeedGuard } from './db';
 import {
   addBodyweight,
+  exportAll,
   finishSession,
   getExerciseHistory,
   getExerciseRecords,
   getMuscleVolume,
   getSessionDetail,
   getSessionPlan,
+  getSessionRecords,
   getSessionSummary,
   getVolumeContext,
+  importMerge,
   logSet,
   moveSessionExercise,
   listExercises,
@@ -316,5 +319,100 @@ describe('bodyweight in volume', () => {
     const sets = await db.setLogs.where('sessionId').equals(session.id).toArray();
     const stored = (await db.sessions.get(session.id))!;
     expect(totalVolumeKg(sets, context.optionsFor(stored))).toBe(640);
+  });
+});
+
+describe('a skip after a set is already logged', () => {
+  it('keeps the sets, and keeps them counted at the finish', async () => {
+    const session = await startLowerA(Date.parse('2026-09-12T18:00:00'));
+    await logSet({
+      sessionId: session.id,
+      exerciseId: 'ex_leg_curl_a',
+      setIndex: 0,
+      load: 40,
+      reps: 10,
+    });
+    await skipSessionExercise(session.id, 'ex_leg_curl_a');
+    await finishSession(session.id);
+
+    const summary = (await getSessionSummary(session.id))!;
+    // One line, and the totals beside it agree with it.
+    expect(summary.exercises.map((r) => r.exerciseId)).toEqual(['ex_leg_curl_a']);
+    expect(summary.setsLogged).toBe(1);
+    expect(summary.volumeKg).toBe(400);
+  });
+
+  it('says nothing about an exercise that was skipped with nothing logged', async () => {
+    const session = await startLowerA();
+    await skipSessionExercise(session.id, 'ex_leg_curl_a');
+    await logSet({
+      sessionId: session.id,
+      exerciseId: 'ex_hack_squat',
+      setIndex: 0,
+      load: 60,
+      reps: 8,
+    });
+    await finishSession(session.id);
+
+    const summary = (await getSessionSummary(session.id))!;
+    expect(summary.exercises.map((r) => r.exerciseId)).toEqual(['ex_hack_squat']);
+  });
+
+  it('still lets those sets hold a record, the way the Records tab reads them', async () => {
+    const first = await startLowerA(Date.parse('2026-09-01T10:00:00'));
+    await logSet({
+      sessionId: first.id,
+      exerciseId: 'ex_leg_curl_a',
+      setIndex: 0,
+      load: 40,
+      reps: 10,
+    });
+    await finishSession(first.id);
+
+    // Second session: one heavier set, then the machine is given up on.
+    const second = await startLowerA(Date.parse('2026-09-08T10:00:00'));
+    await logSet({
+      sessionId: second.id,
+      exerciseId: 'ex_leg_curl_a',
+      setIndex: 0,
+      load: 45,
+      reps: 10,
+    });
+    await skipSessionExercise(second.id, 'ex_leg_curl_a');
+    await finishSession(second.id);
+
+    const records = await getSessionRecords(second.id);
+    expect(records.map((r) => r.exerciseId)).toEqual(['ex_leg_curl_a']);
+    expect(records[0]!.entries.heaviest).toMatchObject({ value: 45 });
+  });
+});
+
+describe('a bundle carrying tmp_ sets', () => {
+  it('exports and re-imports cleanly onto an empty database', async () => {
+    const session = await startLowerA(Date.parse('2026-09-12T18:00:00'));
+    const swapped = await swapSessionExercise(session.id, 'ex_leg_curl_a', 'cat_walking_lunge');
+    await logSet({
+      sessionId: session.id,
+      exerciseId: swapped.id,
+      setIndex: 0,
+      load: 20,
+      reps: 10,
+    });
+    await finishSession(session.id);
+    const bundle = await exportAll();
+
+    resetSeedGuard();
+    await wipeAll();
+    const counts = await importMerge(JSON.parse(JSON.stringify(bundle)));
+    expect(counts.skipped).toBe(0);
+    expect(counts.setLogs).toBe(1);
+
+    // The `tmp_` id has no exercises row, here or anywhere — it resolves
+    // through the snapshot that came back with the session.
+    expect(await db.exercises.get(swapped.id)).toBeUndefined();
+    const detail = (await getSessionDetail(session.id))!;
+    expect(detail.exercises.find((e) => e.id === swapped.id)?.name).toBe('Walking lunge');
+    expect((await getSessionSummary(session.id))!.volumeKg).toBe(200);
+    expect((await getExerciseRecords(swapped.id)).heaviest?.value).toBe(20);
   });
 });

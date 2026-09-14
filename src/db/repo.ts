@@ -1463,7 +1463,11 @@ export interface SessionSummary {
 export async function getSessionSummary(
   sessionId: string,
 ): Promise<SessionSummary | undefined> {
-  const detail = await getSessionDetail(sessionId);
+  // Skipped rows are included so that a set logged *before* the skip (or
+  // before a swap, which skips what it replaces) still gets its line: the
+  // loop below drops anything with nothing logged, so a plain skip is silent
+  // while the totals and the lines keep agreeing.
+  const detail = await getSessionDetail(sessionId, { includeSkipped: true });
   if (!detail) return undefined;
   const { session, templateName, exercises, setsByExercise, sets } = detail;
   const volume = await getVolumeContext();
@@ -1658,7 +1662,11 @@ export interface SessionRecordRow {
  * counted, so nothing is claimed on an exercise's first session.
  */
 export async function getSessionRecords(sessionId: string): Promise<SessionRecordRow[]> {
-  const detail = await getSessionDetail(sessionId);
+  // As in `getSessionSummary`: a set that was logged counts, even if the
+  // exercise was dropped from the plan afterwards — `getAllRecords` reads
+  // those sets too, so leaving them out here would disagree with the Records
+  // tab. Exercises with nothing logged are skipped by the loop.
+  const detail = await getSessionDetail(sessionId, { includeSkipped: true });
   if (!detail) return [];
 
   const out: SessionRecordRow[] = [];

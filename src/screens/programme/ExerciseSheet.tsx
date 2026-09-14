@@ -250,7 +250,7 @@ export function ExerciseSheet({
             visible.increment ??
             (noIncrement
               ? 'Bands, bodyweight and conditioning track reps only.'
-              : 'Added when every set hits the top of the range.')
+              : 'How far the load moves when Progression says it moves.')
           }
         />
 

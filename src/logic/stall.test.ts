@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isStalled, regressionStreak } from './stall';
+import { isStalled, regressionStreak, stallApplies } from './stall';
 import { makeSets, makeWarmup } from './testFixtures';
 
 describe('isStalled', () => {
@@ -113,5 +113,21 @@ describe('warm-ups', () => {
     // Session b holds warm-ups only, so there are two real sessions, not three.
     expect(isStalled(history)).toBe(false);
     expect(regressionStreak(history)).toBe(1);
+  });
+});
+
+describe('stallApplies', () => {
+  it('is true for ordinary rep work, whatever the scheme', () => {
+    expect(stallApplies({ type: 'primary' })).toBe(true);
+    expect(stallApplies({ type: 'accessory', scheme: 'linear' })).toBe(true);
+    expect(stallApplies({ type: 'accessory', scheme: 'none' })).toBe(true);
+  });
+
+  it('is false for work scored on the clock', () => {
+    // Conditioning defaults to `best-time`, where a falling number is progress.
+    expect(stallApplies({ type: 'conditioning' })).toBe(false);
+    expect(stallApplies({ type: 'conditioning', scheme: 'none' })).toBe(false);
+    // And an imported row that names the scheme without the type.
+    expect(stallApplies({ type: 'accessory', scheme: 'best-time' })).toBe(false);
   });
 });

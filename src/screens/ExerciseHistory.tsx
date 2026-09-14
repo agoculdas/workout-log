@@ -19,7 +19,7 @@ import {
   formatRecord,
   recordKindsFor,
 } from '../logic/records';
-import { isStalled } from '../logic/stall';
+import { isStalled, stallApplies } from '../logic/stall';
 import { exerciseMassUnit, massLabel } from '../logic/units';
 import { TrendChart } from './history/charts';
 import { CHART_COLORS } from './history/chartTheme';
@@ -98,9 +98,8 @@ export function ExerciseHistory() {
   const { exercise, templateName, history, entry } = data;
   const completed = completedOnly(history);
   // The stall rule counts reps, so a rowing time that keeps dropping would read
-  // as a regression. Conditioning never gets the badge.
-  const stalled =
-    exercise.type !== 'conditioning' && isStalled(completed.map((h) => h.sets));
+  // as a regression. Work scored on the clock never gets the badge.
+  const stalled = stallApplies(exercise) && isStalled(completed.map((h) => h.sets));
 
   return (
     <div>

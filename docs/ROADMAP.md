@@ -1,8 +1,8 @@
 # Workout Log — feature expansion plan
 
-_Last updated 2026-09-13 (decisions taken). Source of truth for what comes next; edit freely._
+_Last updated 2026-09-14. Source of truth for what comes next; edit freely._
 
-## Where things stand (v1.2)
+## Where things stand
 
 Shipped and live at https://agoculdas.github.io/workout-log/:
 
@@ -13,8 +13,9 @@ Shipped and live at https://agoculdas.github.io/workout-log/:
 - **v2.0 (Phase 2, shipped 2026-09-13)** — programmes with rotations and rest days, user-defined days with split tags, several saved programmes with one active, five presets, same-kind clash rule, rest days that elapse per calendar day, Dexie v3 migration.
 
 - **v2.1 (3.2, shipped 2026-09-13)** — personal records: e1RM, heaviest set, most reps, longest hold, best time, best session volume; PR marks in Session, records in the finish summary, exercise history, and a Records tab in History.
+- **v2.2 (shipped 2026-09-14)** — progression schemes per exercise with a hand-picked stall answer (3.3), the on-demand weekly review under Muscles (3.4), per-exercise rest and notes (4.2), skip / reorder / swap-for-today (4.3), live session duration and a History calendar (4.4, no streak), bodyweight in volume (4.5), and automatic weekly backup to a folder on Android Chrome (5.3).
 
-476 tests. Verified on a real phone up to v1.2.
+599 tests. Verified on a real phone up to v1.2.
 
 **Effort scale used below.** S = a few files, under an hour of agent time. M = one agent session, a few hundred lines. L = multi-agent build with a schema migration, like the library was.
 
@@ -91,45 +92,47 @@ Low risk, no schema migration except new settings fields. One session of work fo
 - **Data.** None. Computed from set logs: best e1RM (Epley: load × (1 + reps ÷ 30)), heaviest set, best session volume, per exercise.
 - **Screens.** "PR" badge on the set in Session when it beats the record; PR line in ExerciseHistory header; a PR list in History; PRs in the Finish summary (1.5).
 
-### 3.3 Progression schemes and stall response — M
+### 3.3 Progression schemes and stall response — M (shipped 2026-09-14)
 - **Data.** `Exercise.scheme: 'double' | 'linear' | 'none' | 'best-time'`. Double is today's rule; linear bumps whenever every set hits the minimum; none just tracks; best-time suggests beating the last time for conditioning.
-- **Rules.** When the stalled marker shows, offer two buttons: "Deload 10%" (sets the suggestion, editable) or "Drop to bottom of range". Never automatic, as the spec says.
+- **Rules.** Tapping the stalled marker opens a sheet with three answers: "Deload 10%", "Bottom of range", or "Keep the suggestion". Never automatic; whichever you pick pre-fills the sets you have not logged yet and is dropped once the exercise is logged (`finishSession`).
+- **Shipped as:** the marker only appears where reps are the measure — `stallApplies` keeps it off conditioning and `best-time` rows, where a falling number is progress.
 
-### 3.4 Weekly review — M
+### 3.4 Weekly review — M (shipped 2026-09-14)
 - **Why.** The Muscles report shows numbers; this turns them into a decision.
 - **Data.** `Settings.setsPerMuscleTarget: { min: 10, max: 20 }`, optionally per muscle.
-- **Screens.** A card on Today each Monday (or on demand in History → Muscles): muscles under target, muscles over, and library entries whose primary muscle is under-served, with "Add to day".
+- **Screens.** On demand in History → Muscles: muscles under target, muscles over, and library entries whose primary muscle is under-served, with "Add to day". **No Today card**, per decision 4 — nothing is offered unprompted.
 
 ---
 
 ## Phase 4 — Session quality of life
 
-### 4.1 Supersets — M
+### 4.1 Supersets — M (not now, by decision)
 - `Exercise.groupId?: string`. Grouped exercises alternate in Session (A1, B1, A2, B2…) with one rest timer per round. Programme editor: "Pair with…".
+- **Decision 5 stands: not now.** The programme does not use them, and the pager would have to grow a second axis. Revisit only if the split changes.
 
-### 4.2 Per-exercise rest and notes — S
+### 4.2 Per-exercise rest and notes — S (shipped 2026-09-14)
 - `Exercise.restOverride?: number` and `Exercise.note?: string` ("seat 4, handles narrow"). Both shown in Session.
 
-### 4.3 Skip, reorder, and swap for today — M
+### 4.3 Skip, reorder, and swap for today — M (shipped 2026-09-14)
 - In Session: skip an exercise (recorded as skipped, no sets), move it later, or "swap for today only" from the library without touching the programme. The session snapshot already makes this safe.
 
-### 4.4 Duration, calendar, streak — S/M
-- Live session duration in the header. History gets a month calendar with trained days marked and a current-streak line.
+### 4.4 Duration and calendar — S/M (shipped 2026-09-14, no streak)
+- Live session duration in the header. History gets a month calendar with trained days marked. **No streak, by decision** — the calendar says what happened, it does not keep score.
 
-### 4.5 Bodyweight in volume — S
+### 4.5 Bodyweight in volume — S (shipped 2026-09-14)
 - Option to count bodyweight × reps for bodyweight exercises, using the latest bodyweight entry.
 
 ---
 
 ## Phase 5 — Data and portability
 
-### 5.1 Pounds — M
-- Store kg internally, convert at display, and switch increments to 5 / 2.5 lb. Touches every formatter, the plate calculator, and the number-field steps. Only worth it if you'll ever train in an lb gym.
+### 5.1 Pounds — M (superseded by decision 6, shipped in Phase 1)
+- Shipped as a *per-exercise* denomination (`Exercise.massUnit`), not a global switch: a rack marked in lb is one exercise's business, and volume totals convert to kilograms. A global switch is not planned.
 
 ### 5.2 Import from other apps — M
 - CSV import for Strong and Hevy exports, mapping their exercise names onto the library with a review step for unmatched names. Only worth it if you have old data.
 
-### 5.3 Automatic backup — M
+### 5.3 Automatic backup — M (shipped 2026-09-14)
 - Android Chrome: File System Access API to write the export to a chosen folder every week. iOS: no equivalent; keep the nudge (1.1).
 
 ### 5.4 Sync — still a non-goal
@@ -141,9 +144,9 @@ Low risk, no schema migration except new settings fields. One session of work fo
 
 1. ~~Phase 1~~ shipped.
 2. ~~Phase 2~~ shipped.
-3. ~~3.2 PRs~~ shipped. Then 3.3 and 3.4 as you feel the need (3.1 RIR was replaced by the to-failure button).
-4. **4.1 supersets** if your programme uses them; the rest of Phase 4 on demand.
-5. **Phase 5** only when a concrete need appears.
+3. ~~3.2 PRs, 3.3 schemes and stall response, 3.4 weekly review~~ shipped. (3.1 RIR was replaced by the to-failure button.)
+4. ~~4.2 rest and notes, 4.3 skip/reorder/swap, 4.4 duration and calendar, 4.5 bodyweight in volume~~ shipped. **4.1 supersets: not now, by decision.**
+5. ~~5.3 automatic backup~~ shipped. The rest of **Phase 5** only when a concrete need appears.
 
 ## Decisions (taken 2026-09-13)
 

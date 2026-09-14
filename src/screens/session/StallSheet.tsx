@@ -85,7 +85,12 @@ export function StallSheet({
           </Button>
         </div>
 
-        <p className="text-xs text-muted">Applies to the next session only.</p>
+        {/* It pre-fills straight away — including the sets still open on this
+            screen — and `finishSession` drops it once the exercise is logged.
+            Saying "next session" would be wrong in the commoner case. */}
+        <p className="text-xs text-muted">
+          Pre-fills the sets you have not logged yet, then it is dropped.
+        </p>
       </div>
     </Sheet>
   );

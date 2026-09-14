@@ -19,6 +19,7 @@ import {
 import { calendarDaysAgo, pickNextSession, type NextSessionPick } from '../logic/nextSession';
 import { dayKindLabel, tagsClash } from '../logic/days';
 import { formatDate, formatLastSession, formatPrescription } from '../logic/format';
+import { workingSets } from '../logic/sets';
 import type { Exercise, Programme, Session, SetLog, SplitTag, Template } from '../db/types';
 
 interface ActiveInfo {
@@ -201,7 +202,8 @@ export function Today() {
       activeInfo = {
         session: active,
         name: detail?.templateName ?? 'Session',
-        loggedSets: detail?.sets.length ?? 0,
+        // Working sets, the same count History and the finish summary use.
+        loggedSets: workingSets(detail?.sets ?? []).length,
       };
     }
 

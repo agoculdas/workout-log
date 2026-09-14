@@ -229,8 +229,10 @@ function DebouncedField({
 }
 
 /**
- * Units, rest-timer defaults, JSON backup/restore, wipe, and install/storage
- * info. Everything writes through `repo` — no direct Dexie access here.
+ * Everything that is a preference rather than a programme, in the order you
+ * meet it: Units, Rest timer, During a session, Plates, Muscles report, Backup
+ * (by hand and automatic), Danger zone, About. Every write goes through `repo`
+ * — no direct Dexie access here.
  */
 export function Settings() {
   const settings = useSettings();
@@ -512,6 +514,35 @@ export function Settings() {
         />
       </Section>
 
+      <Section
+        title="During a session"
+        note="Timers stop counting when the app is in the background — the notification is what reaches you there."
+      >
+        <Toggle
+          label="Keep screen on during sessions"
+          description="Holds a wake lock while the logging screen is open."
+          checked={settings.keepAwake}
+          onChange={(keepAwake) => commit({ keepAwake })}
+        />
+
+        <div className="border-t border-border/70 pt-4">
+          <p className="text-base">Notify when rest ends</p>
+          <p className="mt-0.5 text-xs text-muted">
+            When the app is in the background. {NOTIFY_LABEL[notify]}.
+          </p>
+          {notify === 'default' ? (
+            <Button
+              full
+              variant="secondary"
+              className="mt-3"
+              onClick={() => void askToNotify()}
+            >
+              Allow notifications
+            </Button>
+          ) : null}
+        </div>
+      </Section>
+
       <Section title="Plates" note="Used by the plate calculator on barbell exercises.">
         <DebouncedField
           label="Bar weight"
@@ -593,34 +624,6 @@ export function Settings() {
         />
       </Section>
 
-      <Section
-        title="During a session"
-        note="Timers stop counting when the app is in the background — the notification is what reaches you there."
-      >
-        <Toggle
-          label="Keep screen on during sessions"
-          description="Holds a wake lock while the logging screen is open."
-          checked={settings.keepAwake}
-          onChange={(keepAwake) => commit({ keepAwake })}
-        />
-
-        <div className="border-t border-border/70 pt-4">
-          <p className="text-base">Notify when rest ends</p>
-          <p className="mt-0.5 text-xs text-muted">
-            When the app is in the background. {NOTIFY_LABEL[notify]}.
-          </p>
-          {notify === 'default' ? (
-            <Button
-              full
-              variant="secondary"
-              className="mt-3"
-              onClick={() => void askToNotify()}
-            >
-              Allow notifications
-            </Button>
-          ) : null}
-        </div>
-      </Section>
 
       <Section
         title="Backup"
@@ -768,7 +771,7 @@ export function Settings() {
 
         <div className="border-t border-border/70 pt-4">
           {install.standalone ? (
-            <p className="text-sm text-muted">Running as an installed app. </p>
+            <p className="text-sm text-muted">Running as an installed app.</p>
           ) : install.canInstall ? (
             <Button full variant="secondary" onClick={() => void install.install()}>
               Install app

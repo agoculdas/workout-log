@@ -1,6 +1,20 @@
-import type { SetLog } from '../db/types';
+import type { Exercise, SetLog } from '../db/types';
+import { exerciseScheme } from './progression';
 import { workingSets } from './sets';
 import { topSetLoad, totalReps } from './volume';
+
+/**
+ * Whether the stall rule means anything for this exercise.
+ *
+ * `isStalled` compares *total reps*, so anything scored on the clock reads
+ * backwards: a rowing time that keeps dropping is an improvement, and would be
+ * called a regression twice over. Conditioning items and anything running the
+ * `best-time` scheme therefore never get the marker — the same rule in Session
+ * and on the exercise's own screen.
+ */
+export function stallApplies(exercise: Pick<Exercise, 'type' | 'scheme'>): boolean {
+  return exercise.type !== 'conditioning' && exerciseScheme(exercise) !== 'best-time';
+}
 
 /**
  * "Stalled" = regressed two sessions in a row: each of the two most recent

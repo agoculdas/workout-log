@@ -38,7 +38,7 @@ import {
 import { exerciseScheme, suggestLoad } from '../logic/progression';
 import { setBeats, type SetRecordKind } from '../logic/records';
 import { warmupSets, workingSets } from '../logic/sets';
-import { isStalled } from '../logic/stall';
+import { isStalled, stallApplies } from '../logic/stall';
 import { defaultIncrement, exerciseMassUnit, massLabel } from '../logic/units';
 import { topSetLoad } from '../logic/volume';
 import useSettings from '../hooks/useSettings';
@@ -580,6 +580,9 @@ export function Session() {
   const rowCount = Math.max(plannedSets(exercise), loggedWorking.length);
   const isLast = safeIndex === exercises.length - 1;
   const isConditioning = exercise.type === 'conditioning';
+  // The stall rule counts reps, so it says nothing about work scored on the
+  // clock — `stallApplies` is the same gate the exercise's own screen uses.
+  const stalled = info?.stalled === true && stallApplies(exercise);
 
   return (
     <div>
@@ -607,7 +610,7 @@ export function Session() {
               <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] tracking-wide uppercase">
                 {exercise.type}
               </span>
-              {info?.stalled ? (
+              {stalled ? (
                 // The marker is the way in to the stall sheet, and the only
                 // one — nothing about a deload is offered unprompted. The
                 // pseudo-element gives the small chip a 44px hit area without
@@ -879,7 +882,13 @@ export function Session() {
                         !ex.skipped && done >= planned ? 'text-accent' : 'text-muted',
                       ].join(' ')}
                     >
-                      {ex.skipped ? 'skipped' : `${done}/${planned}`}
+                      {/* A skip after a set or two still says what is logged —
+                          those sets are kept, and they count at the finish. */}
+                      {ex.skipped
+                        ? done
+                          ? `skipped · ${done}`
+                          : 'skipped'
+                        : `${done}/${planned}`}
                     </span>
                   </button>
                   <button

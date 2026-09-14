@@ -23,9 +23,11 @@ export type ProgressionScheme = 'double' | 'linear' | 'none' | 'best-time';
 
 /**
  * A one-off answer to a stall, chosen by hand from the stalled marker. It
- * replaces the next session's suggestion and nothing else: `finishSession`
- * clears it from every exercise that logged a working set, so it can never
- * quietly become the new normal. Deloads are never automatic.
+ * replaces the suggestion on the sets you have not logged yet — the ones still
+ * on screen if you chose it mid-session, the next session's otherwise — and
+ * nothing else: `finishSession` clears it from every exercise that logged a
+ * working set, so it can never quietly become the new normal. Deloads are
+ * never automatic.
  */
 export interface ExerciseOverride {
   /** The load to pre-fill, in the exercise's own denomination. */

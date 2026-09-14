@@ -255,7 +255,10 @@ function SessionDetail({
             const sets = detail.setsByExercise[exercise.id] ?? [];
             const open = openExercise === exercise.id;
 
-            if (exercise.skipped) {
+            // Dropped without logging anything is one dimmed line. Dropped
+            // *after* a set (or swapped out mid-exercise) still shows what was
+            // logged — those sets count towards the session's totals.
+            if (exercise.skipped && !sets.length) {
               return (
                 <li
                   key={exercise.id}
@@ -280,6 +283,7 @@ function SessionDetail({
                     {exercise.addedForToday ? (
                       <span className="text-muted"> (today only)</span>
                     ) : null}
+                    {exercise.skipped ? <span className="text-muted"> · skipped</span> : null}
                   </span>
                   <span className="shrink-0 text-sm tabular-nums text-muted">
                     {formatSetSummary(exercise, sets)}

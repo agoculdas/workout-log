@@ -79,21 +79,23 @@ export function SummarySheet({ summary, onDone }: SummarySheetProps) {
           <h3 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted uppercase">
             Records
           </h3>
-          <ul className="flex flex-col gap-1">
-            {summary.records.flatMap((row) =>
-              row.kinds.map((kind) => {
-                const entry = row.entries[kind];
-                if (!entry) return null;
-                return (
-                  <li key={`${row.exerciseId}:${kind}`} className="text-sm">
-                    {row.name} <span aria-hidden="true">·</span>{' '}
-                    <span className="text-accent tabular-nums">
-                      {formatRecord(row.exercise, kind, entry)}
-                    </span>
-                  </li>
-                );
-              }),
-            )}
+          {/* One line per exercise, not per record: three records on one lift
+              would otherwise repeat a long name three times on a phone. */}
+          <ul className="flex flex-col gap-1.5">
+            {summary.records.map((row) => (
+              <li key={row.exerciseId} className="min-w-0 text-sm">
+                <span className="block truncate">{row.name}</span>
+                <span className="block text-accent tabular-nums">
+                  {row.kinds
+                    .map((kind) => {
+                      const entry = row.entries[kind];
+                      return entry ? formatRecord(row.exercise, kind, entry) : undefined;
+                    })
+                    .filter((text): text is string => text !== undefined)
+                    .join(' · ')}
+                </span>
+              </li>
+            ))}
           </ul>
         </section>
       ) : null}
